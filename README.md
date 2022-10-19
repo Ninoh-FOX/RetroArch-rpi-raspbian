@@ -208,6 +208,17 @@ To configure joypads, use the built-in menu or the `retroarch-joyconfig` command
 
 Instructions for compiling and installing RetroArch can be found in the [Libretro/RetroArch Documentation Center](https://docs.libretro.com/).
 
+## Compiling and installing in RPI 4 / 400
+
+type in terminal
+
+```CFLAGS='-march=armv8-a+crc+simd -mcpu=cortex-a72 -mtune=cortex-a72 -mfloat-abi=hard -mfpu=neon-vfpv4' CXXFLAGS="${CFLAGS}" ./configure --disable-opengl1 --disable-videocore --disable-vulkan --enable-sdl --enable-sdl2 --enable-neon --enable-pulse --enable-udev --enable-hid --enable-alsa --enable-libusb --enable-egl --enable-opengles --enable-opengles3```
+
+```make -j4```
+
+```sudo make install```
+
+
 ## CRT 15Khz Resolution Switching
 
 CRT SwitchRes will turn on, on the fly. However, you will need to restart RetroArch to disable it. With CRT SwitchRes enable RetroArch will start in 2560 x 480 @ 60.
