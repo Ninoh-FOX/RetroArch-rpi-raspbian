@@ -212,9 +212,9 @@ Instructions for compiling and installing RetroArch can be found in the [Libretr
 
 type in terminal
 
-```CFLAGS='-march=armv8-a+crc+simd -mcpu=cortex-a72 -mtune=cortex-a72 -mfloat-abi=hard -mfpu=neon-vfpv4' CXXFLAGS="${CFLAGS}" ./configure --disable-opengl1 --disable-videocore --disable-vulkan --enable-sdl --enable-sdl2 --enable-neon --enable-pulse --enable-udev --enable-hid --enable-alsa --enable-libusb --enable-egl --enable-opengles --enable-opengles3```
+```CFLAGS='-march=armv8-a+crc+simd -mcpu=cortex-a72 -mtune=cortex-a72 -mfloat-abi=hard -mfpu=neon-fp-armv8' CXXFLAGS="${CFLAGS}" ./configure --disable-opengl1 --disable-videocore --disable-vulkan --enable-sdl --enable-sdl2 --enable-neon --enable-pulse --enable-udev --enable-hid --enable-alsa --enable-libusb --enable-egl --enable-opengles --enable-opengles3 --disable-x11 --disable-wayland --disable-kms```
 
-```make -j4```
+```make -f Makefile.rpi -j4```
 
 ```sudo make install```
 
