@@ -209,6 +209,22 @@ To configure joypads, use the built-in menu or manually configure them in `retro
 
 Instructions for compiling and installing RetroArch can be found in the [Libretro/RetroArch Documentation Center](https://docs.libretro.com/).
 
+## Compiling and installing in RPI 4 / 400
+
+type in terminal
+
+```CFLAGS='-march=armv8-a+crc -mcpu=cortex-a72 -mtune=cortex-a72 -mfloat-abi=hard -mfpu=neon-fp-armv8' CXXFLAGS="${CFLAGS}" ./configure --disable-videocore --disable-vulkan --disable-xvideo --enable-x11 --enable-wayland --disable-sdl2 --disable-sdl --enable-kms --enable-neon --enable-pulse --enable-udev --enable-hid --enable-alsa --enable-libusb --enable-opengles --enable-opengles3```
+
+```make -f Makefile.rpi -j4```
+
+when finish type
+
+```sudo make install```
+
+or for deb package
+
+```sudo checkinstall --pkgname=retroarch-rpi400 --pkgversion=1.17.0 --arch=armhf --maintainer="Ninoh-FOX" --nodoc --conflicts=retroarch --replaces=retroarch --pkgsummary="Retroarch for raspbian"```
+
 ## CRT 15Khz Resolution Switching
 
 CRT SwitchRes will turn on, on the fly. However, you will need to restart RetroArch to disable it. With CRT SwitchRes enable RetroArch will start in 2560 x 480 @ 60.
