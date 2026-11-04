@@ -61,6 +61,11 @@
 #include "../../input/input_osk.h"
 #include "../../tasks/tasks_internal.h"
 #include "../../msg_hash_lbl_str.h"
+#ifdef HAVE_POCKET_MENU
+#include "../pocket_menu.h"
+#else
+#define POCKET_SAVESTATE_THUMBNAILS(enabled) (enabled)
+#endif
 
 #ifdef HAVE_AUDIOMIXER
 #include "../../audio/audio_driver.h"
@@ -1907,7 +1912,7 @@ static void xmb_update_savestate_thumbnail_path(void *data, unsigned i)
 
    if (!xmb)
       { free(scratch); return; }
-   savestate_thumbnail        = settings->bools.savestate_thumbnail_enable;
+   savestate_thumbnail        = POCKET_SAVESTATE_THUMBNAILS(settings->bools.savestate_thumbnail_enable);
    strlcpy(old_path, xmb->savestate_thumbnail_file_path, PATH_MAX_LENGTH);
 
    if (xmb->skip_thumbnail_reset)
@@ -1928,6 +1933,22 @@ static void xmb_update_savestate_thumbnail_path(void *data, unsigned i)
       entry->flags |= MENU_ENTRY_FLAG_LABEL_ENABLED;
       menu_entry_get(entry, 0, i, NULL, true);
 
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+      /* Pocket achievement list: the selected badge, large, where a
+       * savestate thumbnail goes (the Miyoo Menu showed it so) */
+      if (     pocket_menu_badge_list_open()
+            && entry->type >= MENU_SETTINGS_CHEEVOS_START
+            && entry->type <  MENU_SETTINGS_NETPLAY_ROOMS_START)
+      {
+         rcheevos_menu_get_badge_path(entry->type - MENU_SETTINGS_CHEEVOS_START,
+               xmb->savestate_thumbnail_file_path,
+               sizeof(xmb->savestate_thumbnail_file_path));
+         if (!string_is_equal(old_path, xmb->savestate_thumbnail_file_path))
+            gfx_thumbnail_reset(&xmb->thumbnails.savestate);
+         xmb->fullscreen_thumbnails_available = true;
+      }
+      else
+#endif
       if (*entry->label)
       {
          unsigned _state_slot = string_to_unsigned(entry->label);
@@ -1935,7 +1956,11 @@ static void xmb_update_savestate_thumbnail_path(void *data, unsigned i)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_STATE_SLOT_STR)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_LOAD_STATE_STR)
-               || string_is_equal(entry->label, MENU_ENUM_LABEL_SAVE_STATE_STR))
+               || string_is_equal(entry->label, MENU_ENUM_LABEL_SAVE_STATE_STR)
+#ifdef HAVE_POCKET_MENU
+               || pocket_menu_entry_state_slot(entry->label, i) >= 0
+#endif
+               )
          {
             char *path = scratch->path;
             runloop_state_t *runloop_st = runloop_state_get_ptr();
@@ -1948,6 +1973,14 @@ static void xmb_update_savestate_thumbnail_path(void *data, unsigned i)
                state_slot         = i - 1;
                xmb->is_state_slot = true;
             }
+#ifdef HAVE_POCKET_MENU
+            /* Pocket Menu slot list: entry index is the slot */
+            if (pocket_menu_entry_state_slot(entry->label, i) >= 0)
+            {
+               state_slot         = (int)i;
+               xmb->is_state_slot = true;
+            }
+#endif
 
             gfx_savestate_thumbnail_get_path(path, PATH_MAX_LENGTH,
                   runloop_st->name.savestate, state_slot);
@@ -4072,7 +4105,15 @@ static void xmb_populate_entries(void *data,
 
    xmb->is_state_slot =
             string_to_unsigned(path) == MENU_ENUM_LABEL_STATE_SLOT
-         || string_is_equal(label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR);
+         || string_is_equal(label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
+#ifdef HAVE_POCKET_MENU
+         || pocket_menu_is_slot_list(label)
+#ifdef HAVE_CHEEVOS
+         || (string_is_equal(label, MENU_ENUM_LABEL_ACHIEVEMENT_LIST_STR)
+            && pocket_menu_in_context())
+#endif
+#endif
+         ;
 
 #if defined(HAVE_LIBRETRODB)
    /* Explore list */
@@ -4122,7 +4163,7 @@ static void xmb_populate_entries(void *data,
       xmb_list_open(xmb,
             settings->uints.menu_xmb_animation_opening_main_menu,
             settings->bools.menu_horizontal_animation && xmb->allow_horizontal_animation,
-            settings->bools.savestate_thumbnail_enable);
+            POCKET_SAVESTATE_THUMBNAILS(settings->bools.savestate_thumbnail_enable));
 
    xmb_set_title(xmb);
 
@@ -4346,6 +4387,24 @@ static uintptr_t xmb_icon_get_id(xmb_handle_t *xmb,
          return GFX_SURFACE_HANDLE(xmb->textures.list[XMB_TEXTURE_SHADER_OPTIONS]);
       case MENU_ENUM_LABEL_ACHIEVEMENT_LIST:
          return GFX_SURFACE_HANDLE(xmb->textures.list[XMB_TEXTURE_ACHIEVEMENT_LIST]);
+#ifdef HAVE_POCKET_MENU
+      case MENU_ENUM_LABEL_POCKET_STATE_SLOT:
+         return pocket_menu_slot_list_is_save()
+               ? GFX_SURFACE_HANDLE(xmb->textures.list[XMB_TEXTURE_SAVESTATE]) : GFX_SURFACE_HANDLE(xmb->textures.list[XMB_TEXTURE_LOADSTATE]);
+      case MENU_ENUM_LABEL_POCKET_SAVE_STATE:
+      case MENU_ENUM_LABEL_POCKET_SAVE_PERF_CORE:
+      case MENU_ENUM_LABEL_POCKET_SAVE_PERF_ROM:
+         return GFX_SURFACE_HANDLE(xmb->textures.list[XMB_TEXTURE_SAVESTATE]);
+      case MENU_ENUM_LABEL_POCKET_LOAD_STATE:
+         return GFX_SURFACE_HANDLE(xmb->textures.list[XMB_TEXTURE_LOADSTATE]);
+      case MENU_ENUM_LABEL_POCKET_PERF_PROFILE:
+         return GFX_SURFACE_HANDLE(xmb->textures.list[XMB_TEXTURE_POWER]);
+      case MENU_ENUM_LABEL_POCKET_JOYPAD_SENSE:
+         return GFX_SURFACE_HANDLE(xmb->textures.list[XMB_TEXTURE_INPUT_SETTINGS]);
+      case MENU_ENUM_LABEL_POCKET_SETTINGS:
+      case MENU_ENUM_LABEL_POCKET_RETURN:
+         return GFX_SURFACE_HANDLE(xmb->textures.list[XMB_TEXTURE_QUICKMENU]);
+#endif
       case MENU_ENUM_LABEL_SAVESTATE_LIST:
       case MENU_ENUM_LABEL_SAVE_STATE:
       case MENU_ENUM_LABEL_CORE_CREATE_BACKUP:

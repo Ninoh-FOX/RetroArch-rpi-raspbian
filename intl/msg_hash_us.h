@@ -39639,3 +39639,138 @@ MSG_HASH(MENU_ENUM_LABEL_VALUE_##T, us)
 #undef S_UINT_AT_EX_H
 #undef S_UINT_AT_EX_NS_H
 #undef SETTINGS_DEF_STRINGS_PASS
+
+#ifdef HAVE_POCKET_MENU
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_MENU,
+   "Pocket Menu"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_MENU,
+   "Compact in-game menu."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_SAVE_STATE,
+   "Save State"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_SAVE_STATE,
+   "Choose a slot to save the game, with a screenshot of the moment."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_LOAD_STATE,
+   "Load State"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_LOAD_STATE,
+   "Choose a slot to load, previewing its screenshot."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_STATE_SLOT,
+   "Slot"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_STATE_SLOT,
+   "Press to use this slot and return to the game."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_PERF_PROFILE,
+   "Performance Profile"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_PERF_PROFILE,
+   "Power Saving runs the emulation on the efficiency cores. Balanced leaves it to the system. Maximum keeps it on the fastest cores and asks for sustained performance."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_PERF_VALUE,
+   "Profile"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_PERF_VALUE,
+   ""
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_SAVE_PERF_CORE,
+   "Save Profile (Core)"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_SAVE_PERF_CORE,
+   "Use the current performance profile every time this core starts."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_SAVE_PERF_ROM,
+   "Save Profile (Game)"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_SAVE_PERF_ROM,
+   "Use the current performance profile for this game. Takes priority over the core profile."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_JOYPAD_SENSE,
+   "Joypad Sensitivity"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_JOYPAD_SENSE,
+   "Window for recognising action buttons pressed together. Instant adds no delay; Fast waits 1 frame; Slow waits 2."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_SETTINGS,
+   "Settings"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_SETTINGS,
+   "Open the full RetroArch Quick Menu for advanced options."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_RETURN,
+   "Pocket Menu"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_POCKET_RETURN,
+   "Return to the Pocket Menu."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_PERF_SAVER,
+   "Power Saving"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_PERF_BALANCED,
+   "Balanced"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_PERF_MAX,
+   "Maximum"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_SENSE_OFF,
+   "Instant"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_SENSE_FAST,
+   "Fast"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_SENSE_SLOW,
+   "Slow"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_SLOT,
+   "Slot %d"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_SLOT_EMPTY,
+   "Empty"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_POCKET_NOT_SAVED,
+   "N/A"
+   )
+MSG_HASH(
+   MSG_POCKET_PERF_SAVED,
+   "Performance profile saved: %s (%s)"
+   )
+MSG_HASH(
+   MSG_POCKET_PERF_SAVE_FAILED,
+   "Could not save the performance profile."
+   )
+#endif

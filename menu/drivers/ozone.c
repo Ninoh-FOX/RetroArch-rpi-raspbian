@@ -46,6 +46,11 @@
 #include "ozone_color_themes.h"
 
 #include "../../msg_hash_lbl_str.h"
+#ifdef HAVE_POCKET_MENU
+#include "../pocket_menu.h"
+#else
+#define POCKET_SAVESTATE_THUMBNAILS(enabled) (enabled)
+#endif
 #include "../../gfx/gfx_animation.h"
 #include "../../gfx/gfx_display.h"
 #include "../../gfx/gfx_thumbnail.h"
@@ -2069,6 +2074,24 @@ static uintptr_t ozone_entries_icon_get_texture(
       case MENU_ENUM_LABEL_STATE_SLOT:
       case MENU_ENUM_LABEL_REPLAY_SLOT:
          return icons_tex[OZONE_ENTRIES_ICONS_TEXTURE_SETTING];
+#ifdef HAVE_POCKET_MENU
+      case MENU_ENUM_LABEL_POCKET_STATE_SLOT:
+         return pocket_menu_slot_list_is_save()
+               ? icons_tex[OZONE_ENTRIES_ICONS_TEXTURE_SAVESTATE] : icons_tex[OZONE_ENTRIES_ICONS_TEXTURE_LOADSTATE];
+      case MENU_ENUM_LABEL_POCKET_SAVE_STATE:
+      case MENU_ENUM_LABEL_POCKET_SAVE_PERF_CORE:
+      case MENU_ENUM_LABEL_POCKET_SAVE_PERF_ROM:
+         return icons_tex[OZONE_ENTRIES_ICONS_TEXTURE_SAVESTATE];
+      case MENU_ENUM_LABEL_POCKET_LOAD_STATE:
+         return icons_tex[OZONE_ENTRIES_ICONS_TEXTURE_LOADSTATE];
+      case MENU_ENUM_LABEL_POCKET_PERF_PROFILE:
+         return icons_tex[OZONE_ENTRIES_ICONS_TEXTURE_POWER];
+      case MENU_ENUM_LABEL_POCKET_JOYPAD_SENSE:
+         return icons_tex[OZONE_ENTRIES_ICONS_TEXTURE_INPUT_SETTINGS];
+      case MENU_ENUM_LABEL_POCKET_SETTINGS:
+      case MENU_ENUM_LABEL_POCKET_RETURN:
+         return icons_tex[OZONE_ENTRIES_ICONS_TEXTURE_QUICKMENU];
+#endif
       case MENU_ENUM_LABEL_SAVESTATE_LIST:
       case MENU_ENUM_LABEL_SAVE_STATE:
       case MENU_ENUM_LABEL_CORE_CREATE_BACKUP:
@@ -4157,7 +4180,7 @@ static void ozone_update_savestate_thumbnail_path(void *data, unsigned i)
 
    if (!ozone)
       { free(scratch); return; }
-   savestate_thumbnail = settings->bools.savestate_thumbnail_enable;
+   savestate_thumbnail = POCKET_SAVESTATE_THUMBNAILS(settings->bools.savestate_thumbnail_enable);
    strlcpy(old_path, ozone->savestate_thumbnail_file_path, PATH_MAX_LENGTH);
 
    if (ozone->flags2 & OZONE_FLAG2_SELECTION_CORE_IS_VIEWER_REAL)
@@ -4186,6 +4209,23 @@ static void ozone_update_savestate_thumbnail_path(void *data, unsigned i)
       entry->flags |= MENU_ENTRY_FLAG_LABEL_ENABLED;
       menu_entry_get(entry, 0, i, NULL, true);
 
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+      /* Pocket achievement list: the selected badge, large, where a
+       * savestate thumbnail goes (the Miyoo Menu showed it so) */
+      if (     pocket_menu_badge_list_open()
+            && entry->type >= MENU_SETTINGS_CHEEVOS_START
+            && entry->type <  MENU_SETTINGS_NETPLAY_ROOMS_START)
+      {
+         rcheevos_menu_get_badge_path(entry->type - MENU_SETTINGS_CHEEVOS_START,
+               ozone->savestate_thumbnail_file_path,
+               sizeof(ozone->savestate_thumbnail_file_path));
+         if (!string_is_equal(old_path, ozone->savestate_thumbnail_file_path))
+            gfx_thumbnail_reset(&ozone->thumbnails.savestate);
+         ozone->flags |= OZONE_FLAG_WANT_THUMBNAIL_BAR
+                       | OZONE_FLAG_FULLSCREEN_THUMBNAILS_AVAILABLE;
+      }
+      else
+#endif
       if (*entry->label)
       {
          unsigned _state_slot = string_to_unsigned(entry->label);
@@ -4193,7 +4233,11 @@ static void ozone_update_savestate_thumbnail_path(void *data, unsigned i)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_STATE_SLOT_STR)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_LOAD_STATE_STR)
-               || string_is_equal(entry->label, MENU_ENUM_LABEL_SAVE_STATE_STR))
+               || string_is_equal(entry->label, MENU_ENUM_LABEL_SAVE_STATE_STR)
+#ifdef HAVE_POCKET_MENU
+               || pocket_menu_entry_state_slot(entry->label, i) >= 0
+#endif
+               )
          {
             char *path = scratch->path;
             runloop_state_t *runloop_st = runloop_state_get_ptr();
@@ -4206,6 +4250,14 @@ static void ozone_update_savestate_thumbnail_path(void *data, unsigned i)
                state_slot    = i - 1;
                ozone->flags |= OZONE_FLAG_IS_STATE_SLOT;
             }
+#ifdef HAVE_POCKET_MENU
+            /* Pocket Menu slot list: entry index is the slot */
+            if (pocket_menu_entry_state_slot(entry->label, i) >= 0)
+            {
+               state_slot    = (int)i;
+               ozone->flags |= OZONE_FLAG_IS_STATE_SLOT;
+            }
+#endif
 
             gfx_savestate_thumbnail_get_path(path, PATH_MAX_LENGTH,
                   runloop_st->name.savestate, state_slot);
@@ -4521,7 +4573,7 @@ static void ozone_sidebar_update_collapse(ozone_handle_t *ozone,
    }
 
 end:
-   ozone_entries_update_thumbnail_bar(ozone, config_get_ptr()->bools.savestate_thumbnail_enable,
+   ozone_entries_update_thumbnail_bar(ozone, POCKET_SAVESTATE_THUMBNAILS(config_get_ptr()->bools.savestate_thumbnail_enable),
          is_playlist, allow_animation);
 }
 
@@ -11230,7 +11282,7 @@ static void ozone_render(void *data,
    if (ozone->flags & OZONE_FLAG_NEED_COMPUTE)
    {
       ozone_compute_entries_position(ozone,
-            settings->bools.savestate_thumbnail_enable,
+            POCKET_SAVESTATE_THUMBNAILS(settings->bools.savestate_thumbnail_enable),
             settings->bools.menu_show_sublabels,
             settings->bools.menu_show_sublabels_current_selection_only,
             settings->bools.content_runtime_log,
@@ -13936,7 +13988,15 @@ static void ozone_populate_entries(
       ozone->flags &= ~OZONE_FLAG_IS_CONTENTLESS_CORES;
 
    if (     string_to_unsigned(path) == MENU_ENUM_LABEL_STATE_SLOT
-         || string_is_equal(label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR))
+         || string_is_equal(label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
+#ifdef HAVE_POCKET_MENU
+         || pocket_menu_is_slot_list(label)
+#ifdef HAVE_CHEEVOS
+         || (string_is_equal(label, MENU_ENUM_LABEL_ACHIEVEMENT_LIST_STR)
+            && pocket_menu_in_context())
+#endif
+#endif
+         )
       ozone->flags |=  OZONE_FLAG_IS_STATE_SLOT;
    else
       ozone->flags &= ~OZONE_FLAG_IS_STATE_SLOT;

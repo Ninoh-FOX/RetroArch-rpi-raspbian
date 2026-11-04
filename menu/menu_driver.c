@@ -6346,6 +6346,14 @@ unsigned menu_event(
                && ok_enum_idx == entry.enum_idx)
             ok_trigger = ok_trigger_release;
 
+#ifdef HAVE_POCKET_MENU
+         /* A Pocket Menu slot saves or loads and resumes: on release,
+          * or the press reaches the game */
+         if (     ok_enum_idx == MENU_ENUM_LABEL_POCKET_STATE_SLOT
+               && ok_enum_idx == entry.enum_idx)
+            ok_trigger = ok_trigger_release;
+#endif
+
          /* Save state resume */
          if (     settings->bools.menu_savestate_resume
                && (  ok_enum_idx == MENU_ENUM_LABEL_LOAD_STATE

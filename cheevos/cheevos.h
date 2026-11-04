@@ -64,6 +64,18 @@ int rcheevos_get_game_badge_url(char *s, size_t len);
 
 void rcheevos_get_local_badge_filename(char badge_file[], size_t badge_file_size, const char* badge, bool locked);
 
+/* Directory a badge lives in: an achievement's badge (numeric name) in
+ * the running game's own folder, badges/i<game badge>/, so each game's
+ * set can be browsed or removed on its own; game, subset, user and
+ * placeholder badges in badges/ itself. @create makes the folder. */
+void rcheevos_get_local_badge_dir(char *s, size_t len, const char* badge,
+      bool create);
+/* Full path of a badge file (see above). A badge still in badges/ from
+ * before the folders is moved into its game's folder, not fetched
+ * again. */
+void rcheevos_get_local_badge_path(char *s, size_t len, const char* badge,
+      bool locked);
+
 struct gfx_surface;
 
 /* The badge's surface (gfx_surface.h; draw GFX_SURFACE_HANDLE of it),

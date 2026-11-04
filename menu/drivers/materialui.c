@@ -49,6 +49,11 @@
 #include "../../gfx/gfx_animation.h"
 #include "../../gfx/gfx_thumbnail.h"
 #include "../../msg_hash_lbl_str.h"
+#ifdef HAVE_POCKET_MENU
+#include "../pocket_menu.h"
+#else
+#define POCKET_SAVESTATE_THUMBNAILS(enabled) (enabled)
+#endif
 
 #include "../../core_info.h"
 #include "../../configuration.h"
@@ -2531,7 +2536,7 @@ static void materialui_update_savestate_thumbnail_path(void *data, unsigned i)
 
    if (!mui)
       { free(scratch); return; }
-   savestate_thumbnail      = settings->bools.savestate_thumbnail_enable;
+   savestate_thumbnail      = POCKET_SAVESTATE_THUMBNAILS(settings->bools.savestate_thumbnail_enable);
 
    /* Snapshot the current path before clearing it, so we can detect
     * whether the resolved path actually changed and only then reset
@@ -2551,6 +2556,21 @@ static void materialui_update_savestate_thumbnail_path(void *data, unsigned i)
       entry->flags |= MENU_ENTRY_FLAG_LABEL_ENABLED;
       menu_entry_get(entry, 0, i, NULL, true);
 
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+      /* Pocket achievement list: the selected badge, large, where a
+       * savestate thumbnail goes (the Miyoo Menu showed it so) */
+      if (     pocket_menu_badge_list_open()
+            && entry->type >= MENU_SETTINGS_CHEEVOS_START
+            && entry->type <  MENU_SETTINGS_NETPLAY_ROOMS_START)
+      {
+         rcheevos_menu_get_badge_path(entry->type - MENU_SETTINGS_CHEEVOS_START,
+               mui->savestate_thumbnail_file_path,
+               sizeof(mui->savestate_thumbnail_file_path));
+         if (!string_is_equal(old_path, mui->savestate_thumbnail_file_path))
+            gfx_thumbnail_reset(&mui->thumbnails.savestate);
+      }
+      else
+#endif
       if (*entry->label)
       {
          unsigned _state_slot = string_to_unsigned(entry->label);
@@ -2558,7 +2578,11 @@ static void materialui_update_savestate_thumbnail_path(void *data, unsigned i)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_STATE_SLOT_STR)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_LOAD_STATE_STR)
-               || string_is_equal(entry->label, MENU_ENUM_LABEL_SAVE_STATE_STR))
+               || string_is_equal(entry->label, MENU_ENUM_LABEL_SAVE_STATE_STR)
+#ifdef HAVE_POCKET_MENU
+               || pocket_menu_entry_state_slot(entry->label, i) >= 0
+#endif
+               )
          {
             char *path = scratch->path;
             runloop_state_t *runloop_st = runloop_state_get_ptr();
@@ -2568,6 +2592,11 @@ static void materialui_update_savestate_thumbnail_path(void *data, unsigned i)
             if (     _state_slot == MENU_ENUM_LABEL_STATE_SLOT
                   || string_is_equal(entry->label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR))
                state_slot    = i - 1;
+#ifdef HAVE_POCKET_MENU
+            /* Pocket Menu slot list: entry index is the slot */
+            if (pocket_menu_entry_state_slot(entry->label, i) >= 0)
+               state_slot    = (int)i;
+#endif
 
             gfx_savestate_thumbnail_get_path(path, PATH_MAX_LENGTH,
                   runloop_st->name.savestate, state_slot);
@@ -6546,6 +6575,14 @@ static bool materialui_is_savestate_slot(materialui_handle_t *mui)
    return
          (  string_to_unsigned(entry.label) == MENU_ENUM_LABEL_STATE_SLOT
          || string_is_equal(entry.label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
+#ifdef HAVE_POCKET_MENU
+         || string_is_equal(entry.label, MENU_ENUM_LABEL_POCKET_STATE_SLOT_STR)
+#ifdef HAVE_CHEEVOS
+         || (   entry.type >= MENU_SETTINGS_CHEEVOS_START
+             && entry.type <  MENU_SETTINGS_NETPLAY_ROOMS_START
+             && pocket_menu_badge_list_open())
+#endif
+#endif
          );
 }
 
@@ -10618,9 +10655,16 @@ static void materialui_populate_entries(void *data, const char *path,
          menu_st->selection_ptr = mui->settings_selection_ptr;
    }
 
-   if (     settings->bools.savestate_thumbnail_enable
+   if (     POCKET_SAVESTATE_THUMBNAILS(settings->bools.savestate_thumbnail_enable)
          && (  string_is_equal(label, MENU_ENUM_LABEL_SAVESTATE_LIST_STR)
             || string_is_equal(label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
+#ifdef HAVE_POCKET_MENU
+            || pocket_menu_is_slot_list(label)
+#ifdef HAVE_CHEEVOS
+            || (string_is_equal(label, MENU_ENUM_LABEL_ACHIEVEMENT_LIST_STR)
+               && pocket_menu_in_context())
+#endif
+#endif
             || string_to_unsigned(path) == MENU_ENUM_LABEL_STATE_SLOT))
    {
       mui->flags |= MUI_FLAG_IS_SAVESTATE_LIST;
@@ -12240,6 +12284,35 @@ static void materialui_list_insert(void *userdata,
             node->icon_texture_index = MUI_TEXTURE_CORE_OPTIONS;
             node->icon_type          = MUI_ICON_TYPE_INTERNAL;
             break;
+#ifdef HAVE_POCKET_MENU
+         case FILE_TYPE_POCKET_SAVE_STATE:
+         case FILE_TYPE_POCKET_SAVE_PERF_CORE:
+         case FILE_TYPE_POCKET_SAVE_PERF_ROM:
+            node->icon_texture_index = MUI_TEXTURE_SAVE_STATE;
+            node->icon_type          = MUI_ICON_TYPE_INTERNAL;
+            break;
+         case FILE_TYPE_POCKET_LOAD_STATE:
+            node->icon_texture_index = MUI_TEXTURE_LOAD_STATE;
+            node->icon_type          = MUI_ICON_TYPE_INTERNAL;
+            break;
+         case FILE_TYPE_POCKET_STATE_SLOT:
+            node->icon_texture_index = MUI_TEXTURE_STATE_SLOT;
+            node->icon_type          = MUI_ICON_TYPE_INTERNAL;
+            break;
+         case FILE_TYPE_POCKET_PERF_PROFILE:
+            node->icon_texture_index = MUI_TEXTURE_CORE_OPTIONS;
+            node->icon_type          = MUI_ICON_TYPE_INTERNAL;
+            break;
+         case FILE_TYPE_POCKET_JOYPAD_SENSE:
+            node->icon_texture_index = MUI_TEXTURE_CONTROLS;
+            node->icon_type          = MUI_ICON_TYPE_INTERNAL;
+            break;
+         case FILE_TYPE_POCKET_SETTINGS:
+         case FILE_TYPE_POCKET_RETURN:
+            node->icon_texture_index = MUI_TEXTURE_QUICKMENU;
+            node->icon_type          = MUI_ICON_TYPE_INTERNAL;
+            break;
+#endif
          case MENU_SETTING_ACTION_CORE_OPTION_OVERRIDE_LIST:
          case MENU_SETTING_ACTION_REMAP_FILE_MANAGER_LIST:
             node->icon_texture_index = MUI_TEXTURE_SETTINGS;

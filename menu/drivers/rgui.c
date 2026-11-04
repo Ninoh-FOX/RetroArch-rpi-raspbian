@@ -51,6 +51,16 @@
 #include "../../gfx/gfx_thumbnail.h"
 
 #include "../../msg_hash_lbl_str.h"
+#ifdef HAVE_POCKET_MENU
+#include "../pocket_menu.h"
+#ifdef HAVE_CHEEVOS
+#include <formats/image.h>
+#include <features/features_cpu.h>
+#include "../../cheevos/cheevos_menu.h"
+#endif
+#else
+#define POCKET_SAVESTATE_THUMBNAILS(enabled) (enabled)
+#endif
 #include "../../configuration.h"
 #include "../../file_path_special.h"
 #include "../../input/input_osk.h"
@@ -292,7 +302,13 @@ enum rgui_flags
    RGUI_FLAG_SHOW_FULLSCREEN_THUMBNAIL = (1 << 23),
    RGUI_FLAG_IS_PLAYLISTS_TAB          = (1 << 24),
    RGUI_FLAG_IS_QUICK_MENU             = (1 << 25),
-   RGUI_FLAG_DRAW_ENTRY_SKIP           = (1 << 26)
+   RGUI_FLAG_DRAW_ENTRY_SKIP           = (1 << 26),
+   /* Pocket Menu lists: drawn over the game; slot lists get the large
+    * savestate thumbnail */
+   RGUI_FLAG_IS_POCKET                 = (1 << 27),
+   RGUI_FLAG_IS_POCKET_SLOTS           = (1 << 28),
+   /* achievement list opened from the Pocket Menu: badges drawn */
+   RGUI_FLAG_IS_POCKET_BADGES          = (1 << 29)
 };
 
 typedef struct rgui_media_gpu_view
@@ -372,6 +388,13 @@ typedef struct
 
    /* The cap a mini thumbnail is fitted into, one word. */
    unsigned mini_thumbnail_max_dims;
+   /* Pocket Menu slot lists: savestate thumbnail half again as large */
+   unsigned pocket_thumbnail_max_dims;
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   struct rgui_badge *badges;   /* RGUI_BADGE_SLOTS, allocated on use */
+   unsigned badge_next;         /* round-robin victim */
+   retro_time_t badges_opened;  /* when the list was populated */
+#endif
    unsigned mini_thumbnail_delay;
    /* The video size this was last laid out for, one word,
     * VIDEO_SCALE_PACK's layout. */
@@ -6244,6 +6267,174 @@ RGUI_NOINLINE static void rgui_media_draw(rgui_t *rgui, unsigned dims)
 
 }
 
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+/* Achievement badges in the list, as the Miyoo Menu drew them: grey
+ * while locked, in colour once unlocked, two text rows tall from the
+ * top of their row, so each overlaps the next like a dealt deck. Each
+ * is decoded and scaled once, then drawn from here; the Miyoo Menu
+ * decoded the PNG of every visible badge every frame. */
+#define RGUI_BADGE_SLOTS     24
+#define RGUI_BADGE_MAX_PX    48
+#define RGUI_BADGE_PER_FRAME 2
+#define RGUI_BADGE_PREVIEW   64
+
+struct rgui_badge
+{
+   int      offset;                 /* menu offset, -1 = free */
+   uint8_t  size;                   /* 0 = not on disk yet */
+   retro_time_t tried;              /* when a missing badge was looked for */
+   uint8_t  opaque[RGUI_BADGE_MAX_PX * RGUI_BADGE_MAX_PX];
+   uint16_t px[RGUI_BADGE_MAX_PX * RGUI_BADGE_MAX_PX];
+};
+
+/* A badge not on disk yet is looked for again this often, for this long
+ * after the list opened: the list fetches the game's set as it opens. */
+#define RGUI_BADGE_RETRY_US   500000
+#define RGUI_BADGE_WAIT_US  30000000
+
+static void rgui_badges_reset(rgui_t *rgui)
+{
+   unsigned i;
+   rgui->badges_opened = cpu_features_get_time_usec();
+   if (!rgui->badges)
+      return;
+   for (i = 0; i < RGUI_BADGE_SLOTS; i++)
+      rgui->badges[i].offset = -1;
+}
+
+static void rgui_badge_decode(struct rgui_badge *b, const char *path,
+      unsigned size)
+{
+   struct texture_image img;
+   unsigned x, y, w, h, ox, oy;
+
+   memset(&img, 0, sizeof(img));
+   b->size = 0;
+   memset(b->opaque, 0, sizeof(b->opaque));
+   if (     !*path
+         || !path_is_valid(path)
+         || !image_texture_load(&img, path)
+         || !img.pixels || !img.width || !img.height)
+   {
+      image_texture_free(&img);
+      return;
+   }
+
+   /* fit, keeping the aspect; badges are square, so this is a scale */
+   w = size;
+   h = size;
+   if (img.width > img.height)
+      h = (size * img.height) / img.width;
+   else if (img.height > img.width)
+      w = (size * img.width) / img.height;
+   if (!w) w = 1;
+   if (!h) h = 1;
+   ox = (size - w) >> 1;
+   oy = (size - h) >> 1;
+
+   for (y = 0; y < h; y++)
+   {
+      const uint32_t *row = img.pixels + ((y * img.height) / h) * img.width;
+      for (x = 0; x < w; x++)
+      {
+         uint32_t p = row[(x * img.width) / w];
+         unsigned d = (oy + y) * size + ox + x;
+         if (img.supports_rgba)
+            p = (p & 0xFF00FF00) | ((p >> 16) & 0xFF) | ((p & 0xFF) << 16);
+         if ((p >> 24) < 0x80)
+            continue;
+         b->px[d]     = argb32_to_pixel_platform_format(p | 0xFF000000);
+         b->opaque[d] = 1;
+      }
+   }
+   b->size = (uint8_t)size;
+   image_texture_free(&img);
+}
+
+/* The badge of menu entry @offset at @size pixels, or NULL. *@pending
+ * is raised when it is not drawn yet but may be next frame: over this
+ * frame's decode budget, or not downloaded yet while the list is new. */
+static const struct rgui_badge *rgui_badge_get(rgui_t *rgui,
+      unsigned offset, unsigned size, unsigned *budget, bool *pending)
+{
+   static char path[PATH_MAX_LENGTH];
+   struct rgui_badge *b = NULL;
+   retro_time_t now;
+   unsigned i;
+
+   if (size > RGUI_BADGE_MAX_PX)
+      size = RGUI_BADGE_MAX_PX;
+   if (!rgui->badges)
+   {
+      if (!(rgui->badges = (struct rgui_badge*)malloc(
+                  RGUI_BADGE_SLOTS * sizeof(*rgui->badges))))
+         return NULL;
+      for (i = 0; i < RGUI_BADGE_SLOTS; i++)
+         rgui->badges[i].offset = -1;
+   }
+
+   for (i = 0; i < RGUI_BADGE_SLOTS; i++)
+      if (rgui->badges[i].offset == (int)offset)
+      {
+         b = &rgui->badges[i];
+         break;
+      }
+
+   if (b && b->size)
+      return b;
+
+   now = cpu_features_get_time_usec();
+   if (b)
+   {
+      /* not on disk when last looked for */
+      if (now - rgui->badges_opened > RGUI_BADGE_WAIT_US)
+         return NULL;
+      *pending = true;
+      if (now - b->tried < RGUI_BADGE_RETRY_US)
+         return NULL;
+   }
+
+   if (!*budget)
+   {
+      *pending = true;
+      return NULL;
+   }
+   (*budget)--;
+
+   if (!b)
+   {
+      b = &rgui->badges[rgui->badge_next];
+      rgui->badge_next = (rgui->badge_next + 1) % RGUI_BADGE_SLOTS;
+      b->offset = (int)offset;
+   }
+   b->tried = now;
+   rcheevos_menu_get_badge_path(offset, path, sizeof(path));
+   rgui_badge_decode(b, path, size);
+
+   if (!b->size && now - rgui->badges_opened <= RGUI_BADGE_WAIT_US)
+      *pending = true;
+   return b->size ? b : NULL;
+}
+
+static void rgui_badge_blit(rgui_t *rgui, const struct rgui_badge *b,
+      unsigned x, unsigned y, unsigned fb_width, unsigned fb_height)
+{
+   unsigned i, j;
+   for (j = 0; j < b->size; j++)
+   {
+      unsigned dy = y + j;
+      if (dy >= fb_height)
+         break;
+      for (i = 0; i < b->size; i++)
+      {
+         unsigned s = j * b->size + i;
+         if (b->opaque[s] && x + i < fb_width)
+            rgui->frame_buf.data[dy * fb_width + x + i] = b->px[s];
+      }
+   }
+}
+#endif
+
 static void rgui_render(void *data, unsigned dims,
       bool is_idle)
 {
@@ -6564,6 +6755,10 @@ static void rgui_render(void *data, unsigned dims,
       unsigned title_y               = rgui->term_layout.start_y - rgui->font_height_stride - 1;
       unsigned sublabel_y            = (rgui->term_layout.height * rgui->font_height_stride) + rgui->term_layout.start_y + 4;
       unsigned term_end_x            = rgui->term_layout.start_x + (rgui->term_layout.width * rgui->font_width_stride);
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+      unsigned badge_budget          = RGUI_BADGE_PER_FRAME;
+      bool badge_pending             = false;
+#endif
       bool show_entries              = (rgui->flags & RGUI_FLAG_DRAW_ENTRY_SKIP) ? false : true;
       bool show_mini_thumbnails      = rgui->media.settings_open || (rgui_inline_thumbnails
             && rgui->playlist_index >= 0
@@ -6574,6 +6769,9 @@ static void rgui_render(void *data, unsigned dims,
       bool show_left_thumbnail       = false;
       bool show_savestate_thumbnail  = (*rgui->savestate_thumbnail_file_path
             && (   (rgui->flags & RGUI_FLAG_IS_STATE_SLOT)
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+               || (rgui->flags & RGUI_FLAG_IS_POCKET_BADGES)
+#endif
                || ((rgui->flags & RGUI_FLAG_IS_QUICK_MENU) && menu_is_running_quick_menu())));
       unsigned thumbnail_panel_width = 0;
       unsigned term_mid_point        = 0;
@@ -6762,6 +6960,9 @@ static void rgui_render(void *data, unsigned dims,
          unsigned entry_value_len                    = 0;
          enum rgui_entry_value_type entry_value_type = RGUI_ENTRY_VALUE_NONE;
          bool entry_selected                         = (i == selection);
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+         int badge_offset                            = -1;
+#endif
          uint16_t entry_color                        = entry_selected
                ? rgui->colors.hover_color
                : rgui->colors.normal_color;
@@ -6786,6 +6987,25 @@ static void rgui_render(void *data, unsigned dims,
          /* Get base length of entry title field */
          entry_title_max_len = rgui->term_layout.width - (1 + 2);
 
+#ifdef HAVE_POCKET_MENU
+         /* Pocket slot list: rows beside the large savestate thumbnail
+          * stop short of it rather than run underneath */
+         if (     show_savestate_thumbnail
+               && (rgui->flags & (RGUI_FLAG_IS_POCKET_SLOTS | RGUI_FLAG_IS_POCKET_BADGES))
+               && rgui->mini_left_thumbnail.is_valid)
+         {
+            unsigned rows   = (VIDEO_SCALE_H(rgui->mini_left_thumbnail.dims)
+                  + rgui->font_height_stride - 1) / rgui->font_height_stride;
+            unsigned offset = (unsigned)(i - new_start);
+            bool beside     = rgui_swap_thumbnails
+                  ? (offset < rows)
+                  : (offset + rows >= rgui->term_layout.height);
+            unsigned cols   = VIDEO_SCALE_W(rgui->mini_left_thumbnail.dims)
+                  / rgui->font_width_stride + 1;
+            if (beside && entry_title_max_len > cols)
+               entry_title_max_len -= cols;
+         }
+#endif
          /* If showing mini thumbnails, reduce title field length accordingly */
          if (show_mini_thumbnails)
          {
@@ -6822,6 +7042,21 @@ static void rgui_render(void *data, unsigned dims,
 
             entry_title_max_len -= (thumbnail_width / rgui->font_width_stride);
          }
+
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+         /* Pocket achievement list: the badge says locked or unlocked,
+          * so it takes the value column, as on the Miyoo Menu */
+         if (     (rgui->flags & RGUI_FLAG_IS_POCKET_BADGES)
+               && entry->type >= MENU_SETTINGS_CHEEVOS_START
+               && entry->type <  MENU_SETTINGS_NETPLAY_ROOMS_START)
+         {
+            unsigned cols = ((rgui->font_height_stride * 2) / rgui->font_width_stride) + 2;
+            badge_offset  = (int)(entry->type - MENU_SETTINGS_CHEEVOS_START);
+            entry_value   = "";
+            if (entry_title_max_len > cols)
+               entry_title_max_len -= cols;
+         }
+#endif
 
          /* Get 'type' of entry value component */
          entry_value_type = rgui_get_entry_value_type(
@@ -6990,7 +7225,29 @@ static void rgui_render(void *data, unsigned dims,
          if (entry_selected)
             rgui_blit_line(rgui, fb_width, x, y, ">",
                   entry_color, rgui->colors.shadow_color);
+
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+         if (badge_offset >= 0)
+         {
+            /* two rows: the next entry's badge covers the lower half,
+             * the Miyoo Menu's "deck" */
+            unsigned size = rgui->font_height_stride * 2;
+            const struct rgui_badge *b = rgui_badge_get(rgui,
+                  (unsigned)badge_offset, size, &badge_budget, &badge_pending);
+            if (b)
+               rgui_badge_blit(rgui, b,
+                     term_end_x - b->size - (rgui->font_width_stride >> 1),
+                     y, fb_width, VIDEO_SCALE_H(p_disp->framebuf_dims));
+         }
+#endif
       }
+
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+      /* RGUI draws only when something changed: come back next frame
+       * for the badges still to decode or still downloading */
+      if (badge_pending)
+         rgui->flags |= RGUI_FLAG_FORCE_REDRAW;
+#endif
 
       /* Draw mini thumbnails, if required */
       if (show_savestate_thumbnail)
@@ -7753,6 +8010,17 @@ static bool rgui_set_aspect_ratio(
 
    rgui->mini_thumbnail.max_dims        = rgui->mini_thumbnail_max_dims;
    rgui->mini_left_thumbnail.max_dims   = rgui->mini_thumbnail_max_dims;
+   {
+      unsigned w      = (VIDEO_SCALE_W(rgui->mini_thumbnail_max_dims) * 3) / 2;
+      unsigned h      = (VIDEO_SCALE_H(rgui->mini_thumbnail_max_dims) * 3) / 2;
+      unsigned term_w = rgui->term_layout.width  * rgui->font_width_stride;
+      unsigned term_h = rgui->term_layout.height * rgui->font_height_stride;
+      if (w > term_w)
+         w = term_w;
+      if (h > term_h)
+         h = term_h;
+      rgui->pocket_thumbnail_max_dims = VIDEO_SCALE_PACK(w, h);
+   }
 
    /* One block for all five buffers, in the order above. Cursors are
     * in uint16_t elements. */
@@ -7766,7 +8034,11 @@ static bool rgui_set_aspect_ratio(
       size_t off_fs    = RGUI_ARENA_NEXT(off_bg,    n_bg);
       size_t off_mini  = RGUI_ARENA_NEXT(off_fs,    n_fs);
       size_t off_minil = RGUI_ARENA_NEXT(off_mini,  n_mini);
-      size_t total     = off_minil + n_mini;
+      /* the savestate thumbnail shares this buffer, at up to the
+       * Pocket Menu's larger size */
+      size_t n_minil   = VIDEO_SCALE_AREA(rgui->pocket_thumbnail_max_dims) > n_mini
+            ? VIDEO_SCALE_AREA(rgui->pocket_thumbnail_max_dims) : n_mini;
+      size_t total     = off_minil + n_minil;
       uint16_t *arena  = (uint16_t*)memalign_alloc(64, total * sizeof(uint16_t));
 
       if (!arena)
@@ -7979,6 +8251,10 @@ static void rgui_free(void *data)
    if (!rgui)
       return;
 
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   free(rgui->badges);
+   rgui->badges = NULL;
+#endif
    rgui_media_close(rgui, false);
    rgui_fonts_free(rgui);
    rgui_buffers_free(rgui);
@@ -8277,7 +8553,7 @@ static void rgui_update_savestate_thumbnail_path(void *data, unsigned i)
    } *scratch;
    settings_t *settings     = config_get_ptr();
    rgui_t *rgui             = (rgui_t*)data;
-   bool savestate_thumbnail = settings->bools.savestate_thumbnail_enable;
+   bool savestate_thumbnail = POCKET_SAVESTATE_THUMBNAILS(settings->bools.savestate_thumbnail_enable);
 
    if (!(scratch = (struct rgui_savestate_thumb_scratch*)malloc(sizeof(*scratch))))
       return;
@@ -8285,6 +8561,23 @@ static void rgui_update_savestate_thumbnail_path(void *data, unsigned i)
    if (!rgui)
       { free(scratch); return; }
    rgui->savestate_thumbnail_file_path[0] = '\0';
+
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   /* Pocket achievement list: the selected badge takes the thumbnail */
+   if (rgui->flags & RGUI_FLAG_IS_POCKET_BADGES)
+   {
+      menu_entry_t *entry = &scratch->entry;
+      MENU_ENTRY_INITIALIZE((*entry));
+      menu_entry_get(entry, 0, i, NULL, true);
+      if (     entry->type >= MENU_SETTINGS_CHEEVOS_START
+            && entry->type <  MENU_SETTINGS_NETPLAY_ROOMS_START)
+         rcheevos_menu_get_badge_path(entry->type - MENU_SETTINGS_CHEEVOS_START,
+               rgui->savestate_thumbnail_file_path,
+               sizeof(rgui->savestate_thumbnail_file_path));
+      free(scratch);
+      return;
+   }
+#endif
 
    /* Savestate thumbnails are only relevant
     * when viewing the running quick menu or state slots */
@@ -8306,7 +8599,11 @@ static void rgui_update_savestate_thumbnail_path(void *data, unsigned i)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_STATE_SLOT_STR)
                || string_is_equal(entry->label, MENU_ENUM_LABEL_LOAD_STATE_STR)
-               || string_is_equal(entry->label, MENU_ENUM_LABEL_SAVE_STATE_STR))
+               || string_is_equal(entry->label, MENU_ENUM_LABEL_SAVE_STATE_STR)
+#ifdef HAVE_POCKET_MENU
+               || pocket_menu_entry_state_slot(entry->label, i) >= 0
+#endif
+               )
          {
             char *path = scratch->path;
             runloop_state_t *runloop_st = runloop_state_get_ptr();
@@ -8319,6 +8616,14 @@ static void rgui_update_savestate_thumbnail_path(void *data, unsigned i)
                state_slot          = i - 1;
                rgui->flags        |= RGUI_FLAG_IS_STATE_SLOT;
             }
+#ifdef HAVE_POCKET_MENU
+            /* Pocket Menu slot list: entry index is the slot */
+            if (pocket_menu_entry_state_slot(entry->label, i) >= 0)
+            {
+               state_slot          = (int)i;
+               rgui->flags        |= RGUI_FLAG_IS_STATE_SLOT;
+            }
+#endif
 
             gfx_savestate_thumbnail_get_path(path, PATH_MAX_LENGTH,
                   runloop_st->name.savestate, state_slot);
@@ -8346,6 +8651,7 @@ static void rgui_reset_savestate_thumbnail(void *data)
    rgui->fs_thumbnail.dims     = 0;
    rgui->fs_thumbnail.is_valid = false;
    rgui->fs_thumbnail.path[0]  = '\0';
+   rgui->mini_left_thumbnail.max_dims = rgui->mini_thumbnail_max_dims;
 
    rgui->flags &= ~RGUI_FLAG_ENTRY_HAS_THUMBNAIL;
    rgui->flags &= ~RGUI_FLAG_ENTRY_HAS_LEFT_THUMBNAIL;
@@ -8365,6 +8671,23 @@ static void rgui_update_savestate_thumbnail_image(void *data)
    {
       bool thumbnails_missing        = false;
       rgui->flags &= ~RGUI_FLAG_ENTRY_HAS_LEFT_THUMBNAIL;
+
+      /* the buffer holds either size (see rgui_set_aspect_ratio) */
+      rgui->mini_left_thumbnail.max_dims =
+            (rgui->flags & RGUI_FLAG_IS_POCKET_SLOTS)
+            ? rgui->pocket_thumbnail_max_dims
+            : rgui->mini_thumbnail_max_dims;
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+      /* the selected badge, large, as on the Miyoo Menu */
+      if (rgui->flags & RGUI_FLAG_IS_POCKET_BADGES)
+      {
+         unsigned w = VIDEO_SCALE_W(rgui->mini_thumbnail_max_dims);
+         unsigned h = VIDEO_SCALE_H(rgui->mini_thumbnail_max_dims);
+         if (w > RGUI_BADGE_PREVIEW) w = RGUI_BADGE_PREVIEW;
+         if (h > RGUI_BADGE_PREVIEW) h = RGUI_BADGE_PREVIEW;
+         rgui->mini_left_thumbnail.max_dims = VIDEO_SCALE_PACK(w, h);
+      }
+#endif
 
       if (rgui_request_thumbnail(
             &rgui->mini_left_thumbnail,
@@ -8895,10 +9218,37 @@ static void rgui_populate_entries(
       rgui->flags &= ~RGUI_FLAG_IS_QUICK_MENU;
 
    if (     string_to_unsigned(path) == MENU_ENUM_LABEL_STATE_SLOT
-         || string_is_equal(label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR))
+         || string_is_equal(label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
+#ifdef HAVE_POCKET_MENU
+         || pocket_menu_is_slot_list(label)
+#endif
+         )
       rgui->flags |=  RGUI_FLAG_IS_STATE_SLOT;
    else
       rgui->flags &= ~RGUI_FLAG_IS_STATE_SLOT;
+
+#ifdef HAVE_POCKET_MENU
+   rgui->flags &= ~(RGUI_FLAG_IS_POCKET | RGUI_FLAG_IS_POCKET_SLOTS
+                  | RGUI_FLAG_IS_POCKET_BADGES);
+   if (pocket_menu_in_context())
+   {
+      rgui->flags |=  RGUI_FLAG_IS_POCKET;
+#ifdef HAVE_CHEEVOS
+      if (string_is_equal(label, MENU_ENUM_LABEL_ACHIEVEMENT_LIST_STR))
+         rgui->flags |=  RGUI_FLAG_IS_POCKET_BADGES;
+#endif
+   }
+#ifdef HAVE_CHEEVOS
+   /* offsets name another list's entries now */
+   rgui_badges_reset(rgui);
+#endif
+   if (pocket_menu_is_slot_list(label))
+      rgui->flags |=  RGUI_FLAG_IS_POCKET_SLOTS;
+   else
+      rgui->mini_left_thumbnail.max_dims = rgui->mini_thumbnail_max_dims;
+   /* the frame is drawn differently: redraw it */
+   rgui->flags |= RGUI_FLAG_FORCE_REDRAW;
+#endif
 
 #if defined(HAVE_LIBRETRODB)
    if (     string_is_equal(label, MENU_ENUM_LABEL_DEFERRED_EXPLORE_LIST_STR)
@@ -9039,7 +9389,15 @@ static void rgui_populate_entries(
           * the video settings menu are preserved */
          rgui_video_settings_t current_video_settings = {{0}};
          rgui_get_video_config(&current_video_settings, settings, settings->uints.video_aspect_ratio_idx);
-         if (rgui_is_video_config_equal(&current_video_settings, &rgui->menu_video_settings))
+         /* Only when restoring changes something: with the content's
+          * settings equal to the menu's (a custom aspect matching the
+          * menu viewport, say) the restore is a no-op, the forced
+          * refresh below repopulates this list, the settings still
+          * match, and every frame reapplies the aspect ratio - the
+          * swapchain or context is rebuilt each frame and the menu is
+          * never seen. */
+         if (     rgui_is_video_config_equal(&current_video_settings, &rgui->menu_video_settings)
+               && !rgui_is_video_config_equal(&current_video_settings, &rgui->content_video_settings))
          {
             rgui_set_video_config_now(rgui, &rgui->content_video_settings);
             /* Menu viewport has been overridden - must ignore

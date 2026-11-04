@@ -1090,6 +1090,11 @@ ifeq ($(HAVE_MENU_COMMON), 1)
           menu/menu_contentless_cores.o
 endif
 
+ifeq ($(HAVE_POCKET_MENU), 1)
+   DEFINES += -DHAVE_POCKET_MENU
+   OBJ += menu/pocket_menu.o
+endif
+
 ifeq ($(HAVE_GFX_WIDGETS), 1)
    OBJ += gfx/gfx_widgets.o
 

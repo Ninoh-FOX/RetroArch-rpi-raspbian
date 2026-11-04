@@ -169,6 +169,9 @@ bool android_get_vfs_authorized_locations(
 #ifdef HAVE_MENU
 #include "menu/menu_cbs.h"
 #include "menu/menu_driver.h"
+#ifdef HAVE_POCKET_MENU
+#include "menu/pocket_menu.h"
+#endif
 #include "menu/menu_input.h"
 #endif
 
@@ -5678,6 +5681,10 @@ void runloop_event_deinit_core(void)
    runloop_state_t *runloop_st = &runloop_state;
    settings_t        *settings = config_get_ptr();
 
+#ifdef HAVE_POCKET_MENU
+   pocket_menu_content_unloaded();
+#endif
+
 #ifdef HAVE_COMMAND
    if (runloop_st->frame_work & RUNLOOP_WORK_RUN_FRAMES)
       command_run_frames_cancel("the content was closed");
@@ -6815,6 +6822,11 @@ bool runloop_event_init_core(
 
    if (runloop_st->entry_state_slot > -1)
       configuration_set_int(settings, settings->ints.state_slot, runloop_st->entry_state_slot);
+
+#ifdef HAVE_POCKET_MENU
+   /* the core's name and the content path are known from here */
+   pocket_menu_content_loaded();
+#endif
 
    return true;
 }
@@ -8296,7 +8308,18 @@ static enum runloop_state_enum runloop_check_state(
                retroarch_menu_running_finished(false);
          }
          else
+         {
+#ifdef HAVE_POCKET_MENU
+            /* In game the menu opens on the Pocket Menu root, wherever
+             * it was left: the pending push below lands it there. */
+            if (!core_type_is_dummy && core_is_running && pocket_menu_active())
+            {
+               bool flush_stack = true;
+               menu_driver_ctl(RARCH_MENU_CTL_SET_PENDING_QUICK_MENU, &flush_stack);
+            }
+#endif
             retroarch_menu_running();
+         }
       }
       /* Initial menu toggle on startup */
       else if (core_type_is_dummy && !(menu_st->flags & MENU_ST_FLAG_ALIVE))
@@ -8463,8 +8486,14 @@ static enum runloop_state_enum runloop_check_state(
 
          p_disp->flags |= GFX_DISP_FLAG_MSG_FORCE;
 
+#ifdef HAVE_POCKET_MENU
+         generic_action_ok_displaylist_push("", NULL,
+               "", 0, 0, 0, pocket_menu_active()
+               ? ACTION_OK_DL_POCKET_MENU : ACTION_OK_DL_CONTENT_SETTINGS);
+#else
          generic_action_ok_displaylist_push("", NULL,
                "", 0, 0, 0, ACTION_OK_DL_CONTENT_SETTINGS);
+#endif
 
          menu_st->selection_ptr  = 0;
          menu_st->flags         &= ~MENU_ST_FLAG_PENDING_QUICK_MENU;
@@ -10084,6 +10113,10 @@ int runloop_iterate(void)
          runloop_st->flags       |= RUNLOOP_FLAG_CORE_RUNNING;
          break;
    }
+
+#ifdef HAVE_POCKET_MENU
+   pocket_menu_frame();
+#endif
 
 #ifdef HAVE_THREADS
    if (runloop_st->flags & RUNLOOP_FLAG_AUTOSAVE)

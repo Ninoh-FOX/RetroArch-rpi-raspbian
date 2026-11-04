@@ -497,9 +497,31 @@ static const msg_hash_strtab_t *msg_hash_lang_strtab(unsigned lang)
 }
 #endif
 
+#ifdef HAVE_POCKET_MENU
+#include "menu/pocket_menu_intl.h"
+/* The table is indexed by (id - FIRST - 1): a block edited in msg_hash.h
+ * without rerunning tools/gen_pocket_intl.py fails here. */
+typedef char pocket_intl_count_check[
+   (POCKET_INTL_COUNT == MENU_ENUM_POCKET_LAST - MENU_ENUM_POCKET_FIRST - 1)
+   ? 1 : -1];
+#endif
+
 const char *msg_hash_to_str(enum msg_hash_enums msg)
 {
    const char *ret = NULL;
+
+#ifdef HAVE_POCKET_MENU
+   /* The Pocket Menu block carries its own table, outside the
+    * Crowdin-generated ones; English is the row in msg_hash_us.h. */
+   if (     msg > MENU_ENUM_POCKET_FIRST
+         && msg < MENU_ENUM_POCKET_LAST)
+   {
+      const char *const *tab = pocket_intl_table(uint_user_language);
+      if (tab && (ret = tab[msg - MENU_ENUM_POCKET_FIRST - 1]))
+         return ret;
+      return msg_hash_to_str_us(msg);
+   }
+#endif
 
 #ifdef HAVE_LANGEXTRA
    {

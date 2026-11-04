@@ -77,6 +77,22 @@ android {
         abiFilters 'arm64-v8a', 'x86_64'
       }
     }
+    pocket {
+      applicationIdSuffix '.pocket'
+      resValue "string", "app_name", "RetroArch Pocket"
+      buildConfigField "boolean", "PLAY_STORE_BUILD", "false"
+
+      dimension "variant"
+      ndk {
+        abiFilters 'arm64-v8a'
+      }
+
+      externalNativeBuild {
+        ndkBuild {
+          arguments "-j${Runtime.runtime.availableProcessors()}", "HAVE_POCKET_MENU=1"
+        }
+      }
+    }
     ra32 {
       applicationIdSuffix '.ra32'
       resValue "string", "app_name", "RetroArch (32-bit)"
@@ -178,6 +194,10 @@ android {
     }
     quest {
       java.srcDirs += ['../play-core-stub']
+    }
+    pocket {
+      java.srcDirs += ['../play-core-stub']
+      res.srcDirs = ['res', 'res64']
     }
   }
 

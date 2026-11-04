@@ -3892,6 +3892,10 @@ static void frontend_unix_init(void *data)
          "getBatteryLevel", "()I");
    GET_METHOD_ID(env, android_app->setSustainedPerformanceMode, class,
          "setSustainedPerformanceMode", "(Z)V");
+   GET_METHOD_ID(env, android_app->setNetplayWifiLock, class,
+         "setNetplayWifiLock", "(Z)V");
+   GET_METHOD_ID(env, android_app->getInternetState, class,
+         "getInternetState", "()I");
    GET_METHOD_ID(env, android_app->setWindowSettings, class,
          "setWindowSettings", "(ZZ)V");
    GET_METHOD_ID(env, android_app->setScreenOrientation, class,
@@ -4574,6 +4578,26 @@ void android_app_set_window_settings(bool notch_write_over,
             (jboolean)notch_write_over, (jboolean)auto_mouse_grab);
 #endif
 }
+
+#ifdef ANDROID
+void android_netplay_wifi_lock(bool on)
+{
+   JNIEnv *env = jni_thread_getenv();
+   if (env && g_android && g_android->setNetplayWifiLock)
+      CALL_VOID_METHOD_PARAM(env, g_android->activity->clazz,
+            g_android->setNetplayWifiLock, on);
+}
+
+int android_internet_state(void)
+{
+   int state   = -1;
+   JNIEnv *env = jni_thread_getenv();
+   if (env && g_android && g_android->getInternetState)
+      CALL_INT_METHOD(env, state,
+            g_android->activity->clazz, g_android->getInternetState);
+   return state;
+}
+#endif
 
 static void frontend_unix_set_sustained_performance_mode(bool on)
 {

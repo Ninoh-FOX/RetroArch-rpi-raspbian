@@ -96,6 +96,9 @@
 #include "../midi_driver.h"
 #include "../record/record_driver.h"
 #include "../msg_hash_lbl_str.h"
+#ifdef HAVE_POCKET_MENU
+#include "pocket_menu.h"
+#endif
 #ifdef __MACH__
 #include <TargetConditionals.h>
 #endif
@@ -4922,6 +4925,195 @@ static int menu_displaylist_parse_horizontal_list(
    return 0;
 }
 
+#ifdef HAVE_POCKET_MENU
+/* Pocket Menu root. Entries that RetroArch already has (Resume,
+ * Achievements, Netplay, Sync Now, Quit) are the native ones, bound and
+ * translated as in the Quick Menu; only the slot lists, the performance
+ * profile and the joypad window are the Pocket Menu's own. */
+static unsigned menu_displaylist_parse_pocket_menu(file_list_t *list,
+      settings_t *settings)
+{
+   unsigned count          = 0;
+   bool savestates_enabled = core_info_current_supports_savestate();
+
+   if (menu_entries_append(list,
+         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_RESUME_CONTENT),
+         MENU_ENUM_LABEL_RESUME_CONTENT_STR,
+         MENU_ENUM_LABEL_RESUME_CONTENT,
+         MENU_SETTING_ACTION_RUN, 0, 0, NULL))
+      count++;
+
+   if (savestates_enabled)
+   {
+      if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_SAVE_STATE),
+            MENU_ENUM_LABEL_POCKET_SAVE_STATE_STR,
+            MENU_ENUM_LABEL_POCKET_SAVE_STATE,
+            FILE_TYPE_POCKET_SAVE_STATE, 0, 0, NULL))
+         count++;
+      /* Shown in hardcore mode too, as the Miyoo Menu did: opening it
+       * there says why a load is refused (see action_ok_pocket_load) */
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_LOAD_STATE),
+               MENU_ENUM_LABEL_POCKET_LOAD_STATE_STR,
+               MENU_ENUM_LABEL_POCKET_LOAD_STATE,
+               FILE_TYPE_POCKET_LOAD_STATE, 0, 0, NULL))
+         count++;
+   }
+
+#ifdef HAVE_CLOUDSYNC
+   if (settings->bools.cloud_sync_enable)
+      if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+            MENU_ENUM_LABEL_CLOUD_SYNC_SYNC_NOW, PARSE_ACTION, false) == 0)
+         count++;
+#endif
+
+   if (menu_entries_append(list,
+         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_PERF_PROFILE),
+         MENU_ENUM_LABEL_POCKET_PERF_PROFILE_STR,
+         MENU_ENUM_LABEL_POCKET_PERF_PROFILE,
+         FILE_TYPE_POCKET_PERF_PROFILE, 0, 0, NULL))
+      count++;
+   if (menu_entries_append(list,
+         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_SAVE_PERF_CORE),
+         MENU_ENUM_LABEL_POCKET_SAVE_PERF_CORE_STR,
+         MENU_ENUM_LABEL_POCKET_SAVE_PERF_CORE,
+         FILE_TYPE_POCKET_SAVE_PERF_CORE, 0, 0, NULL))
+      count++;
+   if (!string_is_empty(path_get(RARCH_PATH_BASENAME)))
+      if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_SAVE_PERF_ROM),
+            MENU_ENUM_LABEL_POCKET_SAVE_PERF_ROM_STR,
+            MENU_ENUM_LABEL_POCKET_SAVE_PERF_ROM,
+            FILE_TYPE_POCKET_SAVE_PERF_ROM, 0, 0, NULL))
+         count++;
+
+#ifdef HAVE_CHEEVOS
+   if (settings->bools.cheevos_enable)
+      if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_ACHIEVEMENT_LIST),
+            MENU_ENUM_LABEL_ACHIEVEMENT_LIST_STR,
+            MENU_ENUM_LABEL_ACHIEVEMENT_LIST,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+         count++;
+#endif
+
+#ifdef HAVE_NETWORKING
+   if (netplay_driver_ctl(RARCH_NETPLAY_CTL_IS_SERVER, NULL))
+   {
+      if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_NETPLAY_DISABLE_HOST),
+            MENU_ENUM_LABEL_NETPLAY_DISCONNECT_STR,
+            MENU_ENUM_LABEL_NETPLAY_DISCONNECT,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+         count++;
+   }
+   else if (!netplay_driver_ctl(RARCH_NETPLAY_CTL_IS_ENABLED, NULL))
+   {
+      if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_NETPLAY_ENABLE_HOST),
+            MENU_ENUM_LABEL_NETPLAY_ENABLE_HOST_STR,
+            MENU_ENUM_LABEL_NETPLAY_ENABLE_HOST,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+         count++;
+   }
+   if (menu_entries_append(list,
+         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_NETPLAY),
+         MENU_ENUM_LABEL_NETPLAY_STR,
+         MENU_ENUM_LABEL_NETPLAY,
+         MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+#endif
+
+   if (menu_entries_append(list,
+         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_JOYPAD_SENSE),
+         MENU_ENUM_LABEL_POCKET_JOYPAD_SENSE_STR,
+         MENU_ENUM_LABEL_POCKET_JOYPAD_SENSE,
+         FILE_TYPE_POCKET_JOYPAD_SENSE, 0, 0, NULL))
+      count++;
+
+   if (menu_entries_append(list,
+         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_SETTINGS),
+         MENU_ENUM_LABEL_POCKET_SETTINGS_STR,
+         MENU_ENUM_LABEL_POCKET_SETTINGS,
+         FILE_TYPE_POCKET_SETTINGS, 0, 0, NULL))
+      count++;
+
+#ifndef HAVE_DYNAMIC
+   if (settings->bools.menu_show_quit_retroarch)
+#endif
+      if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+            MENU_ENUM_LABEL_QUIT_RETROARCH, PARSE_ACTION, false) == 0)
+         count++;
+
+   return count;
+}
+
+/* Ten slots, entry index == slot, so the menu drivers' savestate
+ * thumbnail code finds the slot without a lookup. The current slot is
+ * preselected. */
+static unsigned menu_displaylist_parse_pocket_state_slots(
+      file_list_t *list, settings_t *settings)
+{
+   unsigned count  = 0;
+   int i;
+   const char *fmt = msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_SLOT);
+   struct menu_state *menu_st = menu_state_get_ptr();
+
+   /* dates are read again once per opening, not per frame */
+   pocket_menu_slots_invalidate();
+
+   for (i = 0; i < POCKET_STATE_SLOT_COUNT; i++)
+   {
+      /* "Slot N - date": the date lives in the name, as in the Miyoo
+       * Menu, so no value column runs under RGUI's thumbnail */
+      char name[96];
+      char when[32];
+      size_t _len = snprintf(name, sizeof(name), fmt, i);
+      pocket_menu_slot_value(i, when, sizeof(when));
+      if (_len < sizeof(name))
+         snprintf(name + _len, sizeof(name) - _len, " - %s", when);
+      if (menu_entries_append(list, name,
+            MENU_ENUM_LABEL_POCKET_STATE_SLOT_STR,
+            MENU_ENUM_LABEL_POCKET_STATE_SLOT,
+            FILE_TYPE_POCKET_STATE_SLOT, 0, 0, NULL))
+         count++;
+   }
+
+   if (     settings->ints.state_slot >= 0
+         && settings->ints.state_slot < POCKET_STATE_SLOT_COUNT)
+      menu_st->selection_ptr = (size_t)settings->ints.state_slot;
+   else
+      menu_st->selection_ptr = 0;
+   return count;
+}
+
+static unsigned menu_displaylist_parse_pocket_perf_profile(
+      file_list_t *list)
+{
+   unsigned count = 0;
+   unsigned i;
+   struct menu_state *menu_st = menu_state_get_ptr();
+
+   for (i = 0; i < POCKET_PERF_COUNT; i++)
+      if (menu_entries_append(list, pocket_menu_perf_label(i),
+            MENU_ENUM_LABEL_POCKET_PERF_VALUE_STR,
+            MENU_ENUM_LABEL_POCKET_PERF_VALUE,
+            FILE_TYPE_POCKET_PERF_VALUE, 0, 0, NULL))
+      {
+         /* the radio mark the dropdowns use */
+         menu_file_list_cbs_t *cbs = (menu_file_list_cbs_t*)
+               list->list[list->size - 1].actiondata;
+         if (cbs && i == pocket_menu_perf_get())
+            cbs->checked = true;
+         count++;
+      }
+
+   menu_st->selection_ptr = pocket_menu_perf_get();
+   return count;
+}
+#endif
+
 static int menu_displaylist_parse_load_content_settings(
       file_list_t *list, settings_t *settings,
       bool horizontal)
@@ -4937,6 +5129,16 @@ static int menu_displaylist_parse_load_content_settings(
       bool quickmenu_show_restart_content = settings->bools.quick_menu_show_restart_content;
       bool savestates_enabled             = core_info_current_supports_savestate();
       rarch_system_info_t *sys_info       = &runloop_state_get_ptr()->system;
+
+#ifdef HAVE_POCKET_MENU
+      if (pocket_menu_active())
+         if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_RETURN),
+               MENU_ENUM_LABEL_POCKET_RETURN_STR,
+               MENU_ENUM_LABEL_POCKET_RETURN,
+               FILE_TYPE_POCKET_RETURN, 0, 0, NULL))
+            count++;
+#endif
 
       if (quickmenu_show_resume_content)
          if (menu_entries_append(list,
@@ -16661,6 +16863,14 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_ACHIEVEMENT_LIST:
 #ifdef HAVE_CHEEVOS
             menu_entries_clear(info->list);
+#ifdef HAVE_POCKET_MENU
+            /* opened from the Pocket Menu: the Miyoo Menu's flat list */
+            if (pocket_menu_in_context())
+               rcheevos_menu_populate_pocket(info,
+                     settings->bools.cheevos_enable,
+                     settings->bools.cheevos_hardcore_mode_enable);
+            else
+#endif
             rcheevos_menu_populate(info,
                   settings->bools.cheevos_enable,
                   settings->bools.cheevos_hardcore_mode_enable);
@@ -16960,6 +17170,26 @@ static bool menu_displaylist_ctl_internal(
                info->flags    |=  MD_FLAG_NEED_PUSH;
             }
             break;
+#ifdef HAVE_POCKET_MENU
+         case DISPLAYLIST_POCKET_MENU:
+            menu_entries_clear(info->list);
+            count = menu_displaylist_parse_pocket_menu(info->list, settings);
+            menu_displaylist_no_entries_fallback(info->list, count, FILE_TYPE_NONE);
+            info->flags |= MD_FLAG_NEED_PUSH;
+            break;
+         case DISPLAYLIST_POCKET_STATE_SLOTS:
+            menu_entries_clear(info->list);
+            count = menu_displaylist_parse_pocket_state_slots(info->list, settings);
+            menu_displaylist_no_entries_fallback(info->list, count, FILE_TYPE_NONE);
+            info->flags |= MD_FLAG_NEED_PUSH;
+            break;
+         case DISPLAYLIST_POCKET_PERF_PROFILE:
+            menu_entries_clear(info->list);
+            count = menu_displaylist_parse_pocket_perf_profile(info->list);
+            menu_displaylist_no_entries_fallback(info->list, count, FILE_TYPE_NONE);
+            info->flags |= MD_FLAG_NEED_PUSH;
+            break;
+#endif
          case DISPLAYLIST_STATE_SLOT_RUN:
             {
                bool savestates_enabled     = core_info_current_supports_savestate();

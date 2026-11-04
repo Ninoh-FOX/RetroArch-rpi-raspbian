@@ -3860,3 +3860,50 @@ MSG_HASH(
    "nfs_client_browse"
    )
 #endif
+
+#ifdef HAVE_POCKET_MENU
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_MENU,
+   "pocket_menu"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_SAVE_STATE,
+   "pocket_save_state"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_LOAD_STATE,
+   "pocket_load_state"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_STATE_SLOT,
+   "pocket_state_slot"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_PERF_PROFILE,
+   "pocket_perf_profile"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_PERF_VALUE,
+   "pocket_perf_value"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_SAVE_PERF_CORE,
+   "pocket_save_perf_core"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_SAVE_PERF_ROM,
+   "pocket_save_perf_rom"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_JOYPAD_SENSE,
+   "pocket_joypad_sense"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_SETTINGS,
+   "pocket_settings"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_POCKET_RETURN,
+   "pocket_return"
+   )
+#endif

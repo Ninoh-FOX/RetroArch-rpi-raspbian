@@ -34,7 +34,11 @@ import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
@@ -1288,6 +1292,67 @@ public class RetroActivityCommon extends NativeActivity
    * notch setting takes effect without waiting for the next resume. */
   protected void onNotchSettingChanged()
   {
+  }
+
+  private WifiManager.WifiLock netplayWifiLock = null;
+
+  /* Netplay: keep the Wi-Fi radio out of power saving while a session
+   * runs. Between beacons a sleeping radio holds each packet 100 ms or
+   * more, which shows up as stalls and input lag. LOW_LATENCY (API 29)
+   * also asks the driver for its lowest-latency mode; it applies while
+   * the app is in the foreground with the screen on, which is when a
+   * game is being played. Called from the native thread. */
+  public void setNetplayWifiLock(boolean on)
+  {
+    try {
+      if (on) {
+        if (netplayWifiLock == null) {
+          WifiManager wm = (WifiManager) getApplicationContext()
+              .getSystemService(Context.WIFI_SERVICE);
+          if (wm == null)
+            return;
+          int mode = (Build.VERSION.SDK_INT >= 29)
+              ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+              : WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+          netplayWifiLock = wm.createWifiLock(mode, "RetroArch:netplay");
+          netplayWifiLock.setReferenceCounted(false);
+        }
+        if (!netplayWifiLock.isHeld()) {
+          netplayWifiLock.acquire();
+          Log.i("RetroActivity", "netplay Wi-Fi lock acquired");
+        }
+      } else if (netplayWifiLock != null && netplayWifiLock.isHeld()) {
+        netplayWifiLock.release();
+        Log.i("RetroActivity", "netplay Wi-Fi lock released");
+      }
+    } catch (Exception e) {
+      Log.w("RetroActivity", "netplay Wi-Fi lock: " + e);
+    }
+  }
+
+  /* 1 when the active network reaches the internet (validated by the
+   * system), 0 when it does not (a local hotspot, a router with no
+   * uplink), -1 when it cannot be told. Android keeps its default routes
+   * in per-network tables, so /proc/net/route cannot answer this. */
+  public int getInternetState()
+  {
+    try {
+      if (Build.VERSION.SDK_INT < 23)
+        return -1;
+      ConnectivityManager cm = (ConnectivityManager)
+          getSystemService(Context.CONNECTIVITY_SERVICE);
+      if (cm == null)
+        return -1;
+      Network n = cm.getActiveNetwork();
+      if (n == null)
+        return 0;
+      NetworkCapabilities c = cm.getNetworkCapabilities(n);
+      if (c == null)
+        return -1;
+      return c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ? 1 : 0;
+    } catch (Exception e) {
+      return -1;
+    }
   }
 
   @TargetApi(24)

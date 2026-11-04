@@ -3826,6 +3826,61 @@ extern const struct msg_hash_us_lbl_blob_s msg_hash_us_lbl_blob;
 #else
 #define MENU_ENUM_LABEL_NFS_CLIENT_BROWSE_STR "nfs_client_browse"
 #endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_MENU_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_MENU)
+#else
+#define MENU_ENUM_LABEL_POCKET_MENU_STR "pocket_menu"
+#endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_SAVE_STATE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_SAVE_STATE)
+#else
+#define MENU_ENUM_LABEL_POCKET_SAVE_STATE_STR "pocket_save_state"
+#endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_LOAD_STATE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_LOAD_STATE)
+#else
+#define MENU_ENUM_LABEL_POCKET_LOAD_STATE_STR "pocket_load_state"
+#endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_STATE_SLOT_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_STATE_SLOT)
+#else
+#define MENU_ENUM_LABEL_POCKET_STATE_SLOT_STR "pocket_state_slot"
+#endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_PERF_PROFILE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_PERF_PROFILE)
+#else
+#define MENU_ENUM_LABEL_POCKET_PERF_PROFILE_STR "pocket_perf_profile"
+#endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_PERF_VALUE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_PERF_VALUE)
+#else
+#define MENU_ENUM_LABEL_POCKET_PERF_VALUE_STR "pocket_perf_value"
+#endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_SAVE_PERF_CORE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_SAVE_PERF_CORE)
+#else
+#define MENU_ENUM_LABEL_POCKET_SAVE_PERF_CORE_STR "pocket_save_perf_core"
+#endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_SAVE_PERF_ROM_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_SAVE_PERF_ROM)
+#else
+#define MENU_ENUM_LABEL_POCKET_SAVE_PERF_ROM_STR "pocket_save_perf_rom"
+#endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_JOYPAD_SENSE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_JOYPAD_SENSE)
+#else
+#define MENU_ENUM_LABEL_POCKET_JOYPAD_SENSE_STR "pocket_joypad_sense"
+#endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_SETTINGS_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_SETTINGS)
+#else
+#define MENU_ENUM_LABEL_POCKET_SETTINGS_STR "pocket_settings"
+#endif
+#if defined(HAVE_MENU) && (((defined(HAVE_POCKET_MENU))))
+#define MENU_ENUM_LABEL_POCKET_RETURN_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POCKET_RETURN)
+#else
+#define MENU_ENUM_LABEL_POCKET_RETURN_STR "pocket_return"
+#endif
 #if defined(HAVE_MENU) && (((defined(HAVE_GAME_AI))))
 #define MENU_ENUM_LABEL_QUICK_MENU_SHOW_GAME_AI_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_QUICK_MENU_SHOW_GAME_AI)
 #else

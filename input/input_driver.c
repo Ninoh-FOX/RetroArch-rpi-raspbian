@@ -45,6 +45,9 @@
 #endif
 
 #include "input_driver.h"
+#ifdef HAVE_POCKET_MENU
+#include "../menu/pocket_menu.h"
+#endif
 #ifdef HAVE_THREADS
 #include "input_key_lane.h"
 #endif
@@ -16938,6 +16941,40 @@ static int16_t input_cmd_state(input_driver_state_t *input_st,
    return result;
 }
 
+#ifdef HAVE_POCKET_MENU
+/* Pocket Menu Joypad Sensitivity: an action-button change is held for
+ * 'frames' frames before the core sees it, so buttons meant together
+ * but pressed a frame apart arrive on the same frame. The D-Pad passes
+ * straight through. Runs where the port's frame view is compiled, once
+ * per port per frame, on the word every later read of the frame uses. */
+static int16_t input_pocket_sense_filter(unsigned port, unsigned frames,
+      int16_t view)
+{
+   static uint16_t reported[MAX_USERS];
+   static uint8_t  timer[MAX_USERS];
+   const uint16_t dirs = (1 << RETRO_DEVICE_ID_JOYPAD_UP)
+                       | (1 << RETRO_DEVICE_ID_JOYPAD_DOWN)
+                       | (1 << RETRO_DEVICE_ID_JOYPAD_LEFT)
+                       | (1 << RETRO_DEVICE_ID_JOYPAD_RIGHT);
+   uint16_t cur = (uint16_t)view;
+   uint16_t act = cur & ~dirs;
+   uint16_t rep = reported[port] & ~dirs;
+
+   if (act != rep)
+   {
+      if (timer[port] == 0 || timer[port] > frames)
+         timer[port] = (uint8_t)frames;
+      else if (--timer[port] == 0)
+         rep = act;
+   }
+   else
+      timer[port] = 0;
+
+   reported[port] = (cur & dirs) | rep;
+   return (int16_t)reported[port];
+}
+#endif
+
 int16_t input_driver_state_wrapper(unsigned port, unsigned device,
       unsigned idx, unsigned id)
 {
@@ -16991,6 +17028,9 @@ int16_t input_driver_state_wrapper(unsigned port, unsigned device,
          unsigned socd_h;
          unsigned socd_v;
          unsigned turns;
+#ifdef HAVE_POCKET_MENU
+         unsigned sense;
+#endif
 
          settings             = config_get_ptr();
          socd_h               = settings->uints.input_socd_horizontal;
@@ -16998,10 +17038,18 @@ int16_t input_driver_state_wrapper(unsigned port, unsigned device,
          /* and turning the D-Pad needs all four */
          turns                = settings->uints.input_rotation
             ? input_rotation_turns(settings) : 0;
+#ifdef HAVE_POCKET_MENU
+         /* the filter keeps state across frames: it must see each one */
+         sense                = pocket_menu_joypad_sense();
+#endif
 
          if (     id == RETRO_DEVICE_ID_JOYPAD_MASK
                || (input_st->frame_valid.asked & port_bit)
-               || socd_h || socd_v || turns)
+               || socd_h || socd_v || turns
+#ifdef HAVE_POCKET_MENU
+               || sense
+#endif
+               )
          {
             input_st->frame_view_joypad[port] = input_state_internal(
                   input_st, settings, port, RETRO_DEVICE_JOYPAD, 0,
@@ -17014,6 +17062,11 @@ int16_t input_driver_state_wrapper(unsigned port, unsigned device,
                input_st->frame_view_joypad[port] = input_socd_clean(
                      input_st, socd_h, socd_v, port,
                      input_st->frame_view_joypad[port]);
+#ifdef HAVE_POCKET_MENU
+            if (sense)
+               input_st->frame_view_joypad[port] = input_pocket_sense_filter(
+                     port, sense, input_st->frame_view_joypad[port]);
+#endif
             input_st->frame_valid.view       |= port_bit;
          }
       }

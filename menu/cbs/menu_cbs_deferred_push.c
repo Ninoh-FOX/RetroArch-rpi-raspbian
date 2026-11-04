@@ -127,6 +127,11 @@ GENERIC_DEFERRED_PUSH(deferred_push_core_input_remapping_options,   DISPLAYLIST_
 GENERIC_DEFERRED_PUSH(deferred_push_remap_file_manager,             DISPLAYLIST_REMAP_FILE_MANAGER)
 GENERIC_DEFERRED_PUSH(deferred_push_savestate_list,                 DISPLAYLIST_SAVESTATE_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_state_slot_run,                 DISPLAYLIST_STATE_SLOT_RUN)
+#ifdef HAVE_POCKET_MENU
+GENERIC_DEFERRED_PUSH(deferred_push_pocket_menu,                    DISPLAYLIST_POCKET_MENU)
+GENERIC_DEFERRED_PUSH(deferred_push_pocket_state_slots,             DISPLAYLIST_POCKET_STATE_SLOTS)
+GENERIC_DEFERRED_PUSH(deferred_push_pocket_perf_profile,            DISPLAYLIST_POCKET_PERF_PROFILE)
+#endif
 GENERIC_DEFERRED_PUSH(deferred_push_core_options,                   DISPLAYLIST_CORE_OPTIONS)
 GENERIC_DEFERRED_PUSH(deferred_push_core_option_override_list,      DISPLAYLIST_CORE_OPTION_OVERRIDE_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_disk_options,                   DISPLAYLIST_OPTIONS_DISK)
@@ -797,6 +802,12 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_LOAD_CONTENT_HISTORY, deferred_push_history_list},
       {MENU_ENUM_LABEL_SAVESTATE_LIST, deferred_push_savestate_list},
       {MENU_ENUM_LABEL_STATE_SLOT_RUN, deferred_push_state_slot_run},
+#ifdef HAVE_POCKET_MENU
+      {MENU_ENUM_LABEL_POCKET_MENU, deferred_push_pocket_menu},
+      {MENU_ENUM_LABEL_POCKET_SAVE_STATE, deferred_push_pocket_state_slots},
+      {MENU_ENUM_LABEL_POCKET_LOAD_STATE, deferred_push_pocket_state_slots},
+      {MENU_ENUM_LABEL_POCKET_PERF_PROFILE, deferred_push_pocket_perf_profile},
+#endif
       {MENU_ENUM_LABEL_CORE_OPTIONS, deferred_push_core_options},
       {MENU_ENUM_LABEL_DEFERRED_CORE_OPTION_OVERRIDE_LIST, deferred_push_core_option_override_list},
       {MENU_ENUM_LABEL_NETWORK_INFORMATION, deferred_push_network_information},
@@ -966,6 +977,12 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
          { MENU_ENUM_LABEL_SETTINGS, deferred_push_settings },
          { MENU_ENUM_LABEL_SAVESTATE_LIST, deferred_push_savestate_list },
          { MENU_ENUM_LABEL_STATE_SLOT_RUN, deferred_push_state_slot_run },
+#ifdef HAVE_POCKET_MENU
+         { MENU_ENUM_LABEL_POCKET_MENU, deferred_push_pocket_menu },
+         { MENU_ENUM_LABEL_POCKET_SAVE_STATE, deferred_push_pocket_state_slots },
+         { MENU_ENUM_LABEL_POCKET_LOAD_STATE, deferred_push_pocket_state_slots },
+         { MENU_ENUM_LABEL_POCKET_PERF_PROFILE, deferred_push_pocket_perf_profile },
+#endif
          { MENU_ENUM_LABEL_CORE_OPTIONS, deferred_push_core_options },
          { MENU_ENUM_LABEL_DEFERRED_CORE_OPTION_OVERRIDE_LIST, deferred_push_core_option_override_list },
          { MENU_ENUM_LABEL_CORE_CHEAT_OPTIONS, deferred_push_core_cheat_options },

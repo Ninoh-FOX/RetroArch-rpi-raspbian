@@ -46,6 +46,9 @@
 #endif
 #include "../../playlist.h"
 #include "../../manual_content_scan.h"
+#ifdef HAVE_POCKET_MENU
+#include "../pocket_menu.h"
+#endif
 #include "../../os/lakka/cpufreq/cpufreq.h"
 #ifdef HAVE_LAKKA
 #include "../../os/lakka/lakka.h"
@@ -1024,6 +1027,50 @@ static size_t menu_action_setting_disp_set_label_menu_more(
       strlcpy(s2, path, len2);
    return _len;
 }
+
+#ifdef HAVE_POCKET_MENU
+/* Pocket Menu values: each a cached read or one stat() of a slot,
+ * nothing that touches sysfs per frame. */
+static size_t menu_action_setting_disp_set_label_pocket(
+      file_list_t* list,
+      unsigned *w, unsigned type, unsigned i,
+      const char *label,
+      char *s, size_t len,
+      const char *path,
+      char *s2, size_t len2)
+{
+   unsigned profile = 0;
+
+   *w = 19;
+   if (path && *path)
+      strlcpy(s2, path, len2);
+
+   switch (type)
+   {
+      case FILE_TYPE_POCKET_STATE_SLOT:
+         /* the date is part of the entry name */
+         *s = '\0';
+         return 0;
+      case FILE_TYPE_POCKET_PERF_PROFILE:
+         strlcpy(s, pocket_menu_perf_label(pocket_menu_perf_get()), len);
+         break;
+      case FILE_TYPE_POCKET_SAVE_PERF_CORE:
+      case FILE_TYPE_POCKET_SAVE_PERF_ROM:
+         if (pocket_menu_perf_saved(type == FILE_TYPE_POCKET_SAVE_PERF_ROM, &profile))
+            strlcpy(s, pocket_menu_perf_label(profile), len);
+         else
+            strlcpy(s, msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_NOT_SAVED), len);
+         break;
+      case FILE_TYPE_POCKET_JOYPAD_SENSE:
+         strlcpy(s, pocket_menu_joypad_sense_label(pocket_menu_joypad_sense()), len);
+         break;
+      default:
+         strlcpy(s, msg_hash_to_str(MENU_ENUM_LABEL_VALUE_MORE), len);
+         break;
+   }
+   return strlen(s);
+}
+#endif
 
 #ifdef HAVE_NETWORKING
 /* The player slots asked for, as "1, 3", or "None". */
@@ -2371,6 +2418,19 @@ static int menu_cbs_init_bind_get_string_representation_compare_type(
 
    switch (type)
    {
+#ifdef HAVE_POCKET_MENU
+      case FILE_TYPE_POCKET_SAVE_STATE:
+      case FILE_TYPE_POCKET_LOAD_STATE:
+      case FILE_TYPE_POCKET_SETTINGS:
+      case FILE_TYPE_POCKET_STATE_SLOT:
+      case FILE_TYPE_POCKET_PERF_PROFILE:
+      case FILE_TYPE_POCKET_SAVE_PERF_CORE:
+      case FILE_TYPE_POCKET_SAVE_PERF_ROM:
+      case FILE_TYPE_POCKET_JOYPAD_SENSE:
+         BIND_ACTION_GET_VALUE(cbs,
+               menu_action_setting_disp_set_label_pocket);
+         break;
+#endif
       case FILE_TYPE_CORE:
       case FILE_TYPE_DIRECT_LOAD:
          BIND_ACTION_GET_VALUE(cbs,

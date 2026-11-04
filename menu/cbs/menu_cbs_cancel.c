@@ -27,6 +27,10 @@
 #include "../../cheat_manager.h"
 #endif
 #include "../../msg_hash_lbl_str.h"
+#ifdef HAVE_POCKET_MENU
+#include "../pocket_menu.h"
+#include "../../command.h"
+#endif
 
 #ifndef BIND_ACTION_CANCEL
 #define BIND_ACTION_CANCEL(cbs, name) (cbs)->action_cancel = (name)
@@ -173,6 +177,17 @@ static int action_cancel_core_content(const char *path,
    return 0;
 }
 
+#ifdef HAVE_POCKET_MENU
+/* Back at the root of the Pocket Menu goes back to the game: the menu
+ * was opened from it, and Main Menu is one entry away (Settings). */
+static int action_cancel_pocket_root(const char *path,
+      const char *label, unsigned type, size_t idx)
+{
+   command_event(CMD_EVENT_RESUME, NULL);
+   return 0;
+}
+#endif
+
 static int menu_cbs_init_bind_cancel_compare_label(menu_file_list_cbs_t *cbs,
       const char *label)
 {
@@ -248,6 +263,15 @@ int menu_cbs_init_bind_cancel(menu_file_list_cbs_t *cbs,
    if (cbs)
    {
       BIND_ACTION_CANCEL(cbs, action_cancel_pop_default);
+
+#ifdef HAVE_POCKET_MENU
+      if (     menu_label
+            && string_is_equal(menu_label, MENU_ENUM_LABEL_POCKET_MENU_STR))
+      {
+         BIND_ACTION_CANCEL(cbs, action_cancel_pocket_root);
+         return 0;
+      }
+#endif
 
       if (menu_cbs_init_bind_cancel_compare_label(cbs, label) == 0)
          return 0;

@@ -328,6 +328,8 @@ struct android_app
    jmethodID getPowerstate;
    jmethodID getBatteryLevel;
    jmethodID setSustainedPerformanceMode;
+   jmethodID setNetplayWifiLock;
+   jmethodID getInternetState;
    jmethodID setWindowSettings;
    jmethodID setScreenOrientation;
    jmethodID getUserLanguageString;
@@ -591,6 +593,11 @@ void android_app_set_window_settings(bool notch_write_over,
 struct retro_vfs_authorized_locations;
 
 void android_show_saf_tree_picker(void);
+
+/* Netplay: hold a low-latency Wi-Fi lock for the session. */
+void android_netplay_wifi_lock(bool on);
+/* 1 internet reachable, 0 not (local network only), -1 unknown. */
+int android_internet_state(void);
 bool android_get_vfs_authorized_locations(
       struct retro_vfs_authorized_locations *locations);
 #endif

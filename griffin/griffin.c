@@ -1916,6 +1916,9 @@ MENU
 #include "../menu/menu_displaylist.c"
 #include "../menu/menu_dirwalk.c"
 #include "../menu/menu_contentless_cores.c"
+#ifdef HAVE_POCKET_MENU
+#include "../menu/pocket_menu.c"
+#endif
 #ifdef HAVE_LIBRETRODB
 #include "../menu/menu_explore.c"
 #include "../tasks/task_menu_explore.c"

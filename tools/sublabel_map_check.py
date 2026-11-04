@@ -25,6 +25,7 @@ ROW = re.compile(r'\{\s*(MENU_ENUM_LABEL_\w+)\s*,\s*(MENU_ENUM_SUBLABEL_\w+)\s*\
 # every label any guarded row names has to exist in the probe
 DEFINES = [
     'RARCH_INTERNAL', 'HAVE_MENU', 'HAVE_CONFIGFILE', 'HAVE_NETWORKING',
+    'HAVE_POCKET_MENU',
     'HAVE_SSL', 'HAVE_NFSCLIENT', 'HAVE_SMBCLIENT', 'HAVE_MCP',
     'HAVE_KEYCHAIN', 'HAVE_CRYPTO', 'HAVE_VIDEO_FILTER', 'HAVE_WINRAWINPUT',
     '_WIN32',

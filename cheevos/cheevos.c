@@ -471,14 +471,9 @@ static void rcheevos_award_achievement(const rc_client_achievement_t* cheevo)
 
                   info->achievement_id = cheevo->id;
                   info->rarity = rarity;
-                  rcheevos_get_local_badge_filename(badge_file,
-                        sizeof(badge_file), cheevo->badge_name, false);
-                  fill_pathname_application_special(info->badge_fullpath,
-                        sizeof(info->badge_fullpath),
-                        APPLICATION_SPECIAL_DIRECTORY_THUMBNAILS_CHEEVOS_BADGES);
-                  fill_pathname_join(info->badge_fullpath,
-                        info->badge_fullpath, badge_file,
-                        sizeof(info->badge_fullpath));
+                  (void)badge_file;
+                  rcheevos_get_local_badge_path(info->badge_fullpath,
+                        sizeof(info->badge_fullpath), cheevo->badge_name, false);
 
                   task->handler = rcheevos_retry_achievement_popup;
                   task->callback = rcheevos_retry_achievement_popup_cb;

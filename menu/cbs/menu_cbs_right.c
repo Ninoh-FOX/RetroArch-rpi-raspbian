@@ -42,6 +42,9 @@
 #include "../../audio/audio_driver.h"
 #include "../../verbosity.h"
 #include "../../msg_hash_lbl_str.h"
+#ifdef HAVE_POCKET_MENU
+#include "../pocket_menu.h"
+#endif
 #include "../../ui/ui_companion_driver.h"
 #ifdef HAVE_NETWORKING
 #include "../../network/netplay/netplay.h"
@@ -1209,6 +1212,30 @@ static int action_right_state_slot(unsigned type, const char *label,
    return 0;
 }
 
+#ifdef HAVE_POCKET_MENU
+static int action_right_pocket(unsigned type, const char *label,
+      bool wraparound)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   unsigned count = (type == FILE_TYPE_POCKET_PERF_PROFILE)
+         ? POCKET_PERF_COUNT : POCKET_SENSE_MAX + 1;
+   unsigned cur   = (type == FILE_TYPE_POCKET_PERF_PROFILE)
+         ? pocket_menu_perf_get() : pocket_menu_joypad_sense();
+   unsigned next  = (cur + count + 1) % count;
+
+   /* stop at the ends unless wrapping */
+   if (!wraparound && next != (unsigned)((int)cur + 1))
+      return 0;
+
+   if (type == FILE_TYPE_POCKET_PERF_PROFILE)
+      pocket_menu_perf_set(next);
+   else
+      pocket_menu_joypad_sense_set(next);
+   menu_st->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+   return 0;
+}
+#endif
+
 static int action_right_replay_slot(unsigned type, const char *label,
       bool wraparound)
 {
@@ -1356,6 +1383,12 @@ static int menu_cbs_init_bind_right_compare_type(menu_file_list_cbs_t *cbs,
          case MENU_SETTING_ACTION_HALTREPLAY:
             BIND_ACTION_RIGHT(cbs, action_right_replay_slot);
             break;
+#ifdef HAVE_POCKET_MENU
+         case FILE_TYPE_POCKET_PERF_PROFILE:
+         case FILE_TYPE_POCKET_JOYPAD_SENSE:
+            BIND_ACTION_RIGHT(cbs, action_right_pocket);
+            break;
+#endif
          default:
             return -1;
       }

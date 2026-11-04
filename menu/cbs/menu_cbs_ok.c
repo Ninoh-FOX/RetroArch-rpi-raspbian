@@ -71,6 +71,9 @@
 #include "../../defaults.h"
 #include "../../core_option_manager.h"
 #include "../../msg_hash_lbl_str.h"
+#ifdef HAVE_POCKET_MENU
+#include "../pocket_menu.h"
+#endif
 #ifdef HAVE_CHEATS
 #include "../../cheat_manager.h"
 #endif
@@ -1948,6 +1951,18 @@ int generic_action_ok_displaylist_push(
                0, 0, 0, NULL);
          dl_type            = DISPLAYLIST_CONTENT_SETTINGS;
          break;
+#ifdef HAVE_POCKET_MENU
+      case ACTION_OK_DL_POCKET_MENU:
+         info.list          = MENU_LIST_GET_SELECTION(menu_list, 0);
+         info_path          = msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_MENU);
+         info_label         = MENU_ENUM_LABEL_POCKET_MENU_STR;
+         info.enum_idx      = MENU_ENUM_LABEL_POCKET_MENU;
+         menu_entries_append(menu_stack, info_path, info_label,
+               MENU_ENUM_LABEL_POCKET_MENU,
+               0, 0, 0, NULL);
+         dl_type            = DISPLAYLIST_POCKET_MENU;
+         break;
+#endif
    }
 
    if (info_label)
@@ -8669,6 +8684,106 @@ static int action_ok_push_default(const char *path,
          ACTION_OK_DL_PUSH_DEFAULT);
 }
 
+#ifdef HAVE_POCKET_MENU
+static void pocket_menu_refresh(void)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   menu_st->flags |=  MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+   menu_st->flags &= ~MENU_ST_FLAG_PREVENT_POPULATE;
+}
+
+/* Swap the list on top of the stack for another top-level list,
+ * so Back from either goes where Back from the Quick Menu goes. */
+static int pocket_menu_swap_top(unsigned action_type)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   size_t selection           = 0;
+
+   menu_entries_pop_stack(&selection, 0, 0);
+   menu_st->selection_ptr     = 0;
+   generic_action_ok_displaylist_push("", NULL, "", 0, 0, 0, action_type);
+   menu_st->selection_ptr     = 0;
+   pocket_menu_refresh();
+   return 0;
+}
+
+/* Load State in hardcore mode: say why instead of a list whose every
+ * slot would be refused. */
+static int action_ok_pocket_load(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+#ifdef HAVE_CHEEVOS
+   if (rcheevos_hardcore_active())
+   {
+      const char *_msg = msg_hash_to_str(MSG_CHEEVOS_LOAD_STATE_PREVENTED_BY_HARDCORE_MODE);
+      runloop_msg_queue_push(_msg, strlen(_msg), 0, 180, true, NULL,
+            MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_WARNING);
+      return 0;
+   }
+#endif
+   return action_ok_push_default(path, label, type, idx, entry_idx);
+}
+
+static int action_ok_pocket_state_slot(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   const char *menu_label = NULL;
+   menu_entries_get_last_stack(NULL, &menu_label, NULL, NULL, NULL);
+   return pocket_menu_slot_run(
+         string_is_equal(menu_label, MENU_ENUM_LABEL_POCKET_SAVE_STATE_STR),
+         (int)idx);
+}
+
+static int action_ok_pocket_perf_value(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   size_t selection           = 0;
+
+   pocket_menu_perf_set((unsigned)idx);
+   menu_entries_pop_stack(&selection, 0, 1);
+   menu_st->selection_ptr     = selection;
+   pocket_menu_refresh();
+   return 0;
+}
+
+static int action_ok_pocket_save_perf_core(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   pocket_menu_perf_save(false);
+   pocket_menu_refresh();
+   return 0;
+}
+
+static int action_ok_pocket_save_perf_rom(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   pocket_menu_perf_save(true);
+   pocket_menu_refresh();
+   return 0;
+}
+
+static int action_ok_pocket_joypad_sense(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   pocket_menu_joypad_sense_set(
+         (pocket_menu_joypad_sense() + 1) % (POCKET_SENSE_MAX + 1));
+   return 0;
+}
+
+static int action_ok_pocket_settings(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   return pocket_menu_swap_top(ACTION_OK_DL_CONTENT_SETTINGS);
+}
+
+static int action_ok_pocket_return(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   return pocket_menu_swap_top(ACTION_OK_DL_POCKET_MENU);
+}
+#endif
+
 static int action_ok_start_core(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -10498,6 +10613,36 @@ static int menu_cbs_init_bind_ok_compare_type(menu_file_list_cbs_t *cbs,
          case MENU_SETTING_ACTION_CORE_DISK_OPTIONS:
             BIND_ACTION_OK(cbs, action_ok_push_default);
             break;
+#ifdef HAVE_POCKET_MENU
+         case FILE_TYPE_POCKET_SAVE_STATE:
+         case FILE_TYPE_POCKET_PERF_PROFILE:
+            BIND_ACTION_OK(cbs, action_ok_push_default);
+            break;
+         case FILE_TYPE_POCKET_LOAD_STATE:
+            BIND_ACTION_OK(cbs, action_ok_pocket_load);
+            break;
+         case FILE_TYPE_POCKET_STATE_SLOT:
+            BIND_ACTION_OK(cbs, action_ok_pocket_state_slot);
+            break;
+         case FILE_TYPE_POCKET_PERF_VALUE:
+            BIND_ACTION_OK(cbs, action_ok_pocket_perf_value);
+            break;
+         case FILE_TYPE_POCKET_SAVE_PERF_CORE:
+            BIND_ACTION_OK(cbs, action_ok_pocket_save_perf_core);
+            break;
+         case FILE_TYPE_POCKET_SAVE_PERF_ROM:
+            BIND_ACTION_OK(cbs, action_ok_pocket_save_perf_rom);
+            break;
+         case FILE_TYPE_POCKET_JOYPAD_SENSE:
+            BIND_ACTION_OK(cbs, action_ok_pocket_joypad_sense);
+            break;
+         case FILE_TYPE_POCKET_SETTINGS:
+            BIND_ACTION_OK(cbs, action_ok_pocket_settings);
+            break;
+         case FILE_TYPE_POCKET_RETURN:
+            BIND_ACTION_OK(cbs, action_ok_pocket_return);
+            break;
+#endif
          case FILE_TYPE_PLAYLIST_ENTRY:
             BIND_ACTION_OK(cbs, action_ok_playlist_entry_collection);
             break;

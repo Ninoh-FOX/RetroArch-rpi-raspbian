@@ -493,14 +493,19 @@ static bool rcheevos_client_build_local_badge_path(char badge_fullpath[], size_t
    char* badge_fullname;
    size_t badge_fullname_size;
 
-   /* make sure the directory exists */
-   fill_pathname_application_special(badge_fullpath, badge_fullpath_size,
-      APPLICATION_SPECIAL_DIRECTORY_THUMBNAILS_CHEEVOS_BADGES);
-
-   if (!path_is_directory(badge_fullpath))
+   /* make sure the directory exists: the badges folder, or the game's
+    * own folder inside it for an achievement badge. The "_lock"
+    * variant goes with its badge. */
    {
-      CHEEVOS_LOG(RCHEEVOS_TAG "Creating %s\n", badge_fullpath);
-      path_mkdir(badge_fullpath);
+      char base[40];
+      const char *us = badge_name ? strchr(badge_name, '_') : NULL;
+      size_t n       = us ? (size_t)(us - badge_name) : (badge_name ? strlen(badge_name) : 0);
+      if (n >= sizeof(base))
+         n = sizeof(base) - 1;
+      if (badge_name)
+         memcpy(base, badge_name, n);
+      base[n] = '\0';
+      rcheevos_get_local_badge_dir(badge_fullpath, badge_fullpath_size, base, true);
    }
 
    fill_pathname_slash(badge_fullpath, badge_fullpath_size);

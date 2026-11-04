@@ -19,11 +19,13 @@
 #include <compat/strl.h>
 #include <string/stdstring.h>
 #include <file/file_path.h>
+#include <streams/file_stream.h>
 #include <formats/image.h>
 #include <queues/task_queue.h>
 #include <retro_atomic.h>
 
 #include "cheevos.h"
+#include "cheevos_locals.h"
 
 #include "../gfx/gfx_display.h"
 #include "../gfx/gfx_surface.h"
@@ -36,6 +38,68 @@ void rcheevos_get_local_badge_filename(char badge_file[], size_t badge_file_size
    if (locked)
       _len += strlcpy_lit(badge_file + _len, "_lock", badge_file_size - _len);
    strlcpy(badge_file + _len, FILE_PATH_PNG_EXTENSION, badge_file_size - _len);
+}
+
+static bool rcheevos_badge_is_achievement(const char* badge)
+{
+   const char *p;
+   /* achievement badges are server ids, "12345"; "00000" is the
+    * placeholder, and 'i'/'u' prefix game, subset and user badges */
+   if (!badge || !*badge || string_is_equal(badge, "00000"))
+      return false;
+   for (p = badge; *p; p++)
+      if (*p < '0' || *p > '9')
+         return false;
+   return true;
+}
+
+void rcheevos_get_local_badge_dir(char *s, size_t len, const char* badge,
+      bool create)
+{
+   fill_pathname_application_special(s, len,
+      APPLICATION_SPECIAL_DIRECTORY_THUMBNAILS_CHEEVOS_BADGES);
+
+   if (rcheevos_badge_is_achievement(badge))
+   {
+      const rcheevos_locals_t* locals = get_rcheevos_locals();
+      const rc_client_game_t* game    = locals && locals->client
+            ? rc_client_get_game_info(locals->client) : NULL;
+
+      if (game && game->badge_name[0])
+      {
+         char sub[40];
+         snprintf(sub, sizeof(sub), "i%s", game->badge_name);
+         fill_pathname_join(s, s, sub, len);
+      }
+   }
+
+   if (create && !path_is_directory(s))
+      path_mkdir(s);
+}
+
+void rcheevos_get_local_badge_path(char *s, size_t len, const char* badge,
+      bool locked)
+{
+   char file[48];
+   char dir[PATH_MAX_LENGTH];
+
+   rcheevos_get_local_badge_filename(file, sizeof(file), badge, locked);
+   rcheevos_get_local_badge_dir(dir, sizeof(dir), badge, false);
+   fill_pathname_join(s, dir, file, len);
+
+   if (rcheevos_badge_is_achievement(badge) && !path_is_valid(s))
+   {
+      char old[PATH_MAX_LENGTH];
+      fill_pathname_application_special(old, sizeof(old),
+         APPLICATION_SPECIAL_DIRECTORY_THUMBNAILS_CHEEVOS_BADGES);
+      fill_pathname_join(old, old, file, sizeof(old));
+      if (!string_is_equal(old, s) && path_is_valid(old))
+      {
+         rcheevos_get_local_badge_dir(dir, sizeof(dir), badge, true);
+         if (filestream_rename(old, s) != 0)
+            strlcpy(s, old, len);
+      }
+   }
 }
 
 /* --- Badge textures ---------------------------------------------------
@@ -310,10 +374,8 @@ static void rcheevos_badge_start_load(unsigned idx, uint32_t seq,
    char fullpath[PATH_MAX_LENGTH];
    rcheevos_badge_load_tag_t* tag;
 
-   fill_pathname_application_special(fullpath, sizeof(fullpath),
-      APPLICATION_SPECIAL_DIRECTORY_THUMBNAILS_CHEEVOS_BADGES);
-   rcheevos_get_local_badge_filename(badge_file, sizeof(badge_file), badge, locked);
-   fill_pathname_join(fullpath, fullpath, badge_file, sizeof(fullpath));
+   (void)badge_file;
+   rcheevos_get_local_badge_path(fullpath, sizeof(fullpath), badge, locked);
 
    if (!path_is_valid(fullpath))
    {
@@ -553,11 +615,8 @@ bool rcheevos_is_badge_available(const char* badge, bool locked)
    char badge_file[24];
    char fullpath[PATH_MAX_LENGTH];
 
-   rcheevos_get_local_badge_filename(badge_file, sizeof(badge_file), badge, locked);
-
-   fill_pathname_application_special(fullpath, sizeof(fullpath),
-      APPLICATION_SPECIAL_DIRECTORY_THUMBNAILS_CHEEVOS_BADGES);
-   fill_pathname_join(fullpath, fullpath, badge_file, sizeof(fullpath));
+   (void)badge_file;
+   rcheevos_get_local_badge_path(fullpath, sizeof(fullpath), badge, locked);
 
    return path_is_valid(fullpath);
 }

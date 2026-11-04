@@ -26,6 +26,8 @@ HAVE_RETRONFS := 1
 # EDID reader behind Information > Display Information > EDID.
 HAVE_MODELINE := 1
 HAVE_OPENXR ?= 0
+# Pocket Menu: compact in-game menu for handhelds (pocket flavor)
+HAVE_POCKET_MENU ?= 0
 
 INCFLAGS    :=
 DEFINES     :=
@@ -97,6 +99,10 @@ ifeq ($(HAVE_CRYPTO),1)
    ifeq ($(HAVE_RETROSMB),1)
       DEFINES += -DHAVE_SMBCLIENT -DHAVE_RETROSMB
    endif
+endif
+
+ifeq ($(HAVE_POCKET_MENU),1)
+   DEFINES += -DHAVE_POCKET_MENU
 endif
 
 ifeq ($(HAVE_MODELINE),1)

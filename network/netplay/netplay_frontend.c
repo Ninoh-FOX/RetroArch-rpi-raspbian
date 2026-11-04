@@ -95,6 +95,13 @@
 
 #include "netplay_private.h"
 
+#ifdef ANDROID
+#include "../../frontend/drivers/platform_unix.h"
+#endif
+#if defined(__linux__) || defined(ANDROID)
+#include <stdio.h>
+#endif
+
 #ifdef TCP_NODELAY
 #define SET_TCP_NODELAY(fd) \
    { \
@@ -106,6 +113,58 @@
 #else
 #define SET_TCP_NODELAY(fd)
 #endif
+
+/* Mark netplay traffic real time (DSCP EF, 802.1d priority 5): Wi-Fi
+ * drivers and WMM routers then queue it in the video access category,
+ * ahead of bulk traffic on the same network. Best effort: a socket of
+ * the other family, or a stack that refuses, keeps default marking. */
+#if defined(IP_TOS)
+#define NETPLAY_DSCP_EF 0xB8
+static void netplay_socket_low_latency(int fd)
+{
+   int tos = NETPLAY_DSCP_EF;
+   setsockopt(fd, IPPROTO_IP, IP_TOS, (const char*)&tos, sizeof(tos));
+#if defined(IPV6_TCLASS)
+   setsockopt(fd, IPPROTO_IPV6, IPV6_TCLASS, (const char*)&tos, sizeof(tos));
+#endif
+#if defined(SO_PRIORITY)
+   {
+      int prio = 5;
+      setsockopt(fd, SOL_SOCKET, SO_PRIORITY, (const char*)&prio, sizeof(prio));
+   }
+#endif
+}
+#define SET_LOW_LATENCY(fd) netplay_socket_low_latency(fd);
+#else
+#define SET_LOW_LATENCY(fd)
+#endif
+
+/* Whether the lobby and relay servers can be reached. Only Android can
+ * tell (the system validates each network); elsewhere, and when it
+ * cannot say, assume they can and let the request decide. */
+static bool netplay_internet_reachable(void)
+{
+#ifdef ANDROID
+   return android_internet_state() != 0;
+#else
+   return true;
+#endif
+}
+
+/* Keep the Wi-Fi radio awake for the session: a radio in power saving
+ * holds each packet until the next beacon, 100 ms or more. */
+static void netplay_wifi_low_latency(bool on)
+{
+#ifdef ANDROID
+   static bool held = false;
+   if (on == held)
+      return;
+   held = on;
+   android_netplay_wifi_lock(on);
+#else
+   (void)on;
+#endif
+}
 
 #if defined(F_SETFD) && defined(FD_CLOEXEC)
 #define SET_FD_CLOEXEC(fd) \
@@ -4020,6 +4079,7 @@ static int handle_connection(netplay_t *netplay, netplay_address_t *addr,
    }
 
    SET_TCP_NODELAY(new_fd)
+   SET_LOW_LATENCY(new_fd)
    SET_FD_CLOEXEC(new_fd)
 
    return new_fd;
@@ -4033,6 +4093,7 @@ static bool netplay_tunnel_connect(int fd, const struct addrinfo *addr)
       return false;
 
    SET_TCP_NODELAY(fd)
+   SET_LOW_LATENCY(fd)
    SET_FD_CLOEXEC(fd)
 
    result = socket_connect(fd, (void*)addr);
@@ -6170,7 +6231,7 @@ static bool netplay_get_cmd(netplay_t *netplay,
       if (     cmd_size > ((uint32_t)1 << 30)
             || !netplay_resize_socket_buffer(&connection->recv_packet_buffer,
                   cmd_size + 2 * sizeof(uint32_t)
-                  + NETPLAY_MAX_STALL_FRAMES * 16))
+                  + netplay->max_stall_frames * 16))
          return netplay_cmd_nak(netplay, connection);
    }
 
@@ -7695,6 +7756,7 @@ static int init_tcp_connection(netplay_t *netplay, const struct addrinfo *addr,
       return -1;
 
    SET_TCP_NODELAY(fd)
+   SET_LOW_LATENCY(fd)
    SET_FD_CLOEXEC(fd)
 
    if (!is_server)
@@ -7944,7 +8006,7 @@ static bool netplay_init_socket_buffers(netplay_t *netplay)
     * frames of input data, plus the headers for each of them */
    size_t i;
    size_t packet_buffer_size = netplay->zbuffer_size +
-      NETPLAY_MAX_STALL_FRAMES * 16;
+      netplay->max_stall_frames * 16;
    netplay->packet_buffer_size = packet_buffer_size;
 
    for (i = 0; i < netplay->connections_size; i++)
@@ -8183,12 +8245,67 @@ bool netplay_wait_and_init_serialization(netplay_t *netplay)
    return false;
 }
 
+/* Largest stall window whose save-state frames fit in half the memory
+ * the system reports available, the rest being the core's and the
+ * system's: every buffered frame holds a whole state, and a server
+ * keeps twice as many, so a large state (CPS3, big Neo Geo sets) on a
+ * small device was enough for the low-memory killer to end the
+ * session. NETPLAY_MAX_STALL_FRAMES where memory is plentiful or the
+ * figure is unknown; 0 when not even a short window fits. */
+static uint32_t netplay_max_stall_frames(size_t state_size, bool is_server)
+{
+#if defined(__linux__) || defined(ANDROID)
+   char line[128];
+   unsigned long avail_kb = 0;
+   uint64_t slots;
+   uint32_t frames;
+   FILE *f;
+
+   if (!state_size || !(f = fopen("/proc/meminfo", "r")))
+      return NETPLAY_MAX_STALL_FRAMES;
+   while (fgets(line, sizeof(line), f))
+      if (sscanf(line, "MemAvailable: %lu kB", &avail_kb) == 1)
+         break;
+   fclose(f);
+   if (!avail_kb)
+      return NETPLAY_MAX_STALL_FRAMES;
+
+   /* besides the frames: zbuffer (2 states) and the first connection's
+    * send and receive buffers (2 each) */
+   slots  = ((uint64_t)avail_kb * 1024 / 2) / state_size;
+   slots  = (slots > 6) ? slots - 6 : 0;
+   if (is_server)
+      slots /= 2;
+   frames = (slots > 2) ? (uint32_t)(slots - 2) : 0;
+   if (frames > NETPLAY_MAX_STALL_FRAMES)
+      frames = NETPLAY_MAX_STALL_FRAMES;
+   if (frames < NETPLAY_MAX_STALL_FRAMES)
+      RARCH_LOG("[Netplay] Save state %u KB, %lu KB available: stall window %u frames.\n",
+            (unsigned)(state_size / 1024), avail_kb, (unsigned)frames);
+   /* below this any Wi-Fi hiccup stalls the game every few frames */
+   return (frames < 8) ? 0 : frames;
+#else
+   (void)state_size;
+   (void)is_server;
+   return NETPLAY_MAX_STALL_FRAMES;
+#endif
+}
+
 static bool netplay_init_buffers(netplay_t *netplay)
 {
-   /* Enough to get ahead or behind by MAX_STALL_FRAMES frames,
+   netplay->max_stall_frames = netplay_max_stall_frames(
+         core_serialize_size_special(),
+         (netplay->flags & NETPLAY_FLAG_IS_SERVER) ? true : false);
+   if (!netplay->max_stall_frames)
+   {
+      RARCH_ERR("[Netplay] Not enough memory for the save states of this core.\n");
+      return false;
+   }
+
+   /* Enough to get ahead or behind by max_stall_frames frames,
       plus one for other remote clients,
       plus one to send the stall message. */
-   netplay->buffer_size = NETPLAY_MAX_STALL_FRAMES + 2;
+   netplay->buffer_size = netplay->max_stall_frames + 2;
 
    /* If we're the server,
       we need enough to get ahead AND behind by MAX_STALL_FRAMES frame. */
@@ -8328,6 +8445,8 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
    netplay->cbs              = *cb;
    netplay->quirks           = quirks;
    netplay->modus            = modus;
+   /* until netplay_init_buffers() sizes it from the save state */
+   netplay->max_stall_frames = NETPLAY_MAX_STALL_FRAMES;
    netplay->flags |= NETPLAY_FLAG_CRCS_VALID;
    /* Our own choice: a lockstep peer plays with a rollback one */
    if (     modus == NETPLAY_MODUS_INPUT_FRAME_SYNC
@@ -9319,7 +9438,7 @@ static bool netplay_poll(netplay_t *netplay, bool block_libretro_input)
    switch (netplay->stall)
    {
       case NETPLAY_STALL_RUNNING_FAST:
-         if ((netplay->unread_frame_count + NETPLAY_MAX_STALL_FRAMES - 2) >
+         if ((netplay->unread_frame_count + netplay->max_stall_frames - 2) >
                netplay->self_frame_count)
          {
             struct netplay_connection *connection;
@@ -9412,10 +9531,10 @@ static bool netplay_poll(netplay_t *netplay, bool block_libretro_input)
 
       /* Are we too far ahead? */
       if (netplay->stall == NETPLAY_STALL_NONE &&
-            netplay->self_frame_count >= NETPLAY_MAX_STALL_FRAMES)
+            netplay->self_frame_count >= netplay->max_stall_frames)
       {
          uint32_t min_frame_count = netplay->self_frame_count -
-            NETPLAY_MAX_STALL_FRAMES;
+            netplay->max_stall_frames;
 
          if (netplay->unread_frame_count <= min_frame_count)
          {
@@ -9700,7 +9819,7 @@ static void netplay_announce_cb(retro_task_t *task, void *task_data,
 
    if (err || !data || !data->data || !data->len || data->status != 200)
    {
-      RARCH_ERR("[Netplay] Failed to announce session to the lobby server.");
+      RARCH_ERR("[Netplay] Failed to announce session to the lobby server.\n");
       return;
    }
 
@@ -9825,6 +9944,15 @@ static void netplay_announce(netplay_t *netplay)
    struct retro_system_info *system = &runloop_state_get_ptr()->system.info;
    struct string_list *subsystem    = path_get_subsystem_list();
    settings_t *settings             = config_get_ptr();
+
+   /* Local network only (a hotspot, a router with no uplink): the lobby
+    * cannot be reached, so do not spend a request on it; try later */
+   if (!netplay_internet_reachable())
+   {
+      netplay->next_announce =
+         cpu_features_get_time_usec() + NETPLAY_ANNOUNCE_TIME;
+      return;
+   }
 
    net_http_urlencode(&username, netplay->nick);
 
@@ -9980,6 +10108,13 @@ static void netplay_announce(netplay_t *netplay)
  * not, so there is no completion that leaves this set. */
 static bool netplay_mitm_query_pending = false;
 
+/* Requests made for the outstanding tunnel query. A failed one is made
+ * again, within NETPLAY_MITM_QUERY_TIMEOUT: one dropped request would
+ * otherwise send the session to direct mode, where a room behind NAT
+ * cannot be joined from outside. */
+#define NETPLAY_MITM_QUERY_ATTEMPTS 3
+static unsigned netplay_mitm_query_attempts = 0;
+
 /* Incremented for every query issued, and again when one is
  * abandoned.  The callback carries the value it was issued with and
  * does nothing if it no longer matches.
@@ -10017,7 +10152,26 @@ static void netplay_mitm_query_cb(retro_task_t *task, void *task_data,
 
    if (err || !data || !data->data || !data->len || data->status != 200)
    {
-      RARCH_ERR("[Netplay] Failed to query the lobby server for tunnel information.");
+      if (     netplay_mitm_query_attempts < NETPLAY_MITM_QUERY_ATTEMPTS
+            && *netplay_mitm_query_handle)
+      {
+         char query[256];
+         size_t _len = strlcpy(query, FILE_PATH_LOBBY_LIBRETRO_URL "tunnel?name=",
+               sizeof(query));
+         strlcpy(query + _len, netplay_mitm_query_handle, sizeof(query) - _len);
+         RARCH_WARN("[Netplay] Tunnel query attempt %u failed (%s, HTTP %d), retrying.\n",
+               netplay_mitm_query_attempts, err ? err : "no data",
+               data ? data->status : 0);
+         netplay_mitm_query_attempts++;
+         /* same generation: whoever waits keeps waiting for this answer */
+         netplay_mitm_query_pending = true;
+         if (task_push_http_transfer(query, true, NULL,
+               netplay_mitm_query_cb, user_data))
+            return;
+         netplay_mitm_query_pending = false;
+      }
+      RARCH_ERR("[Netplay] Failed to query the lobby server for tunnel information (%s, HTTP %d).\n",
+            err ? err : "no data", data ? data->status : 0);
       return;
    }
 
@@ -10120,12 +10274,21 @@ static bool netplay_mitm_query_begin(const char *handle)
       return true;
    }
 
+   /* No route to the lobby: a relay cannot be had, host directly
+    * without spending the timeout on it */
+   if (!netplay_internet_reachable())
+   {
+      RARCH_LOG("[Netplay] No internet on this network, relay server skipped.\n");
+      return false;
+   }
+
    {
       char query[256];
       size_t _len = strlcpy(query, FILE_PATH_LOBBY_LIBRETRO_URL "tunnel?name=",
             sizeof(query));
       strlcpy(query + _len, handle, sizeof(query) - _len);
       netplay_mitm_query_pending = true;
+      netplay_mitm_query_attempts = 1;
       ++netplay_mitm_query_generation;
 
       if (!task_push_http_transfer(query, true, NULL,
@@ -10541,6 +10704,9 @@ void deinit_netplay(void)
    net_driver_state_t *net_st  = &networking_driver_st;
    netplay_t          *netplay = net_st->data;
 
+   /* every way out of a session, including one that failed to start */
+   netplay_wifi_low_latency(false);
+
    if (netplay)
    {
 #ifdef HAVE_BSV_MOVIE
@@ -10619,6 +10785,9 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
 #ifdef HAVE_NETPLAYDISCOVERY
    net_st->lan_ad_server_fd       = -1;
 #endif
+
+   /* before any traffic, so the relay query runs with the radio awake */
+   netplay_wifi_low_latency(true);
 
    serialization_quirks = core_serialization_quirks();
 
