@@ -19,6 +19,9 @@
 #include "../runloop.h"
 #include "../steam/steam.h"
 
+/* Between asks for the download's progress. */
+#define STEAM_DLC_PROGRESS_PARK_USEC 250000
+
 typedef struct steam_core_dlc_install_state
 {
    AppId app_id;
@@ -28,12 +31,14 @@ typedef struct steam_core_dlc_install_state
 
 static void task_steam_core_dlc_install_handler(retro_task_t *task)
 {
+   uint8_t flg;
    int8_t progress;
    steam_core_dlc_install_state_t *state = NULL;
    MistResult result                     = MistResult_Success;
    bool downloading                      = false;
    uint64_t bytes_downloaded             = 0;
    uint64_t bytes_total                  = 0;
+   bool cancelled                        = false;
 
    if (!task)
       goto task_finished;
@@ -41,8 +46,13 @@ static void task_steam_core_dlc_install_handler(retro_task_t *task)
    if (!(state = (steam_core_dlc_install_state_t*)task->state))
       goto task_finished;
 
-   if (task_get_cancelled(task))
+   flg = task_get_flags(task);
+
+   if ((flg & RETRO_TASK_FLG_CANCELLED) > 0)
+   {
+      cancelled = true;
       goto task_finished;
+   }
 
    result = mist_steam_apps_get_dlc_download_progress(state->app_id, &downloading, &bytes_downloaded, &bytes_total);
    if (MIST_IS_ERROR(result))
@@ -67,22 +77,25 @@ static void task_steam_core_dlc_install_handler(retro_task_t *task)
 
    task_set_progress(task, progress);
 
+   /* Steam has nothing to wake the task with, so it asks again at the
+    * rate a progress bar wants. */
+   task_queue_park(task, STEAM_DLC_PROGRESS_PARK_USEC);
    return;
 task_finished:
    if (task)
-      task_set_finished(task, true);
+      task_set_flags(task, RETRO_TASK_FLG_FINISHED, true);
 
-   /* If finished successfully */
-   if (MIST_IS_SUCCESS(result))
+   /* If finished successfully; a cancelled install did not finish */
+   if (MIST_IS_SUCCESS(result) && !cancelled)
    {
       char msg[128];
       size_t _len = strlcpy(msg, msg_hash_to_str(MSG_CORE_INSTALLED),
             sizeof(msg));
-      strlcpy(msg       + _len,
+      _len += strlcpy(msg       + _len,
             state->name,
             sizeof(msg) - _len);
 
-      runloop_msg_queue_push(msg, 1, 180, true, NULL,
+      runloop_msg_queue_push(msg, _len, 1, 180, true, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
    }
 
@@ -105,6 +118,21 @@ void task_push_steam_core_dlc_install(
    steam_core_dlc_install_state_t* state = (steam_core_dlc_install_state_t*)calloc(1,
          sizeof(steam_core_dlc_install_state_t));
 
+   /* NULL-check both allocations: the state->app_id / state->name
+    * writes below NULL-deref on calloc failure, and task->handler
+    * / task->state writes NULL-deref on task_init failure.  On OOM
+    * free the one that succeeded (free(NULL) is a no-op) and
+    * return silently; the caller is menu Steam-DLC action which
+    * has no task-return channel - the DLC simply won't install,
+    * which is the same observable behaviour as the task running
+    * and failing. */
+   if (!task || !state)
+   {
+      free(task);
+      free(state);
+      return;
+   }
+
    state->app_id         = app_id;
    state->name           = strdup(name);
    state->has_downloaded = false;
@@ -117,7 +145,6 @@ void task_push_steam_core_dlc_install(
 
    task->handler  = task_steam_core_dlc_install_handler;
    task->state    = state;
-   task->mute     = false;
    task->title    = strdup(task_title);
    task->progress = 0;
    task->callback = NULL;

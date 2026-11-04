@@ -27,9 +27,9 @@
 #include "../msg_hash.h"
 #include "../setting_list.h"
 
-#define MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list, label, parse_type, add_empty_entry) menu_displaylist_parse_settings_enum(list, parse_type, add_empty_entry, menu_setting_find_enum(label), label, true)
+#define MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list, label, parse_type, add_empty_entry) menu_displaylist_parse_settings_enum(list, parse_type, add_empty_entry, menu_setting_find_enum(label), label, true, settings->bools.menu_show_advanced_settings)
 
-#define MENU_DISPLAYLIST_PARSE_SETTINGS(list, label, parse_type, add_empty_entry, entry_type) menu_displaylist_parse_settings_enum(list, parse_type, add_empty_entry, menu_setting_find(label), entry_type, false)
+#define MENU_DISPLAYLIST_PARSE_SETTINGS(list, label, parse_type, add_empty_entry, entry_type) menu_displaylist_parse_settings_enum(list, parse_type, add_empty_entry, menu_setting_find(label), entry_type, false, settings->bools.menu_show_advanced_settings)
 
 RETRO_BEGIN_DECLS
 
@@ -60,7 +60,10 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_DROPDOWN_LIST,
    DISPLAYLIST_DROPDOWN_LIST_SPECIAL,
    DISPLAYLIST_DROPDOWN_LIST_RESOLUTION,
+   DISPLAYLIST_DROPDOWN_LIST_CRT_SUPER_RESOLUTION,
+   DISPLAYLIST_DROPDOWN_LIST_HEADSET_REFRESH_RATE,
    DISPLAYLIST_DROPDOWN_LIST_AUDIO_DEVICE,
+   DISPLAYLIST_DROPDOWN_LIST_MIDI_DEVICE,
 #ifdef HAVE_MICROPHONE
    DISPLAYLIST_DROPDOWN_LIST_MICROPHONE_DEVICE,
 #endif
@@ -72,14 +75,19 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_DROPDOWN_LIST_PLAYLIST_RIGHT_THUMBNAIL_MODE,
    DISPLAYLIST_DROPDOWN_LIST_PLAYLIST_LEFT_THUMBNAIL_MODE,
    DISPLAYLIST_DROPDOWN_LIST_PLAYLIST_SORT_MODE,
+   DISPLAYLIST_DROPDOWN_LIST_SCAN_METHOD,
+   DISPLAYLIST_DROPDOWN_LIST_SCAN_USE_DB,
+   DISPLAYLIST_DROPDOWN_LIST_SCAN_DB_SELECT,
    DISPLAYLIST_DROPDOWN_LIST_MANUAL_CONTENT_SCAN_SYSTEM_NAME,
    DISPLAYLIST_DROPDOWN_LIST_MANUAL_CONTENT_SCAN_CORE_NAME,
    DISPLAYLIST_DROPDOWN_LIST_DISK_INDEX,
+   DISPLAYLIST_DROPDOWN_LIST_INPUT_RETROPAD_BIND,
    DISPLAYLIST_DROPDOWN_LIST_INPUT_DEVICE_TYPE,
    DISPLAYLIST_DROPDOWN_LIST_INPUT_DESCRIPTION,
    DISPLAYLIST_DROPDOWN_LIST_INPUT_DESCRIPTION_KBD,
+   DISPLAYLIST_DROPDOWN_LIST_INPUT_SELECT_RESERVED_DEVICE,
 #ifdef ANDROID
-    DISPLAYLIST_DROPDOWN_LIST_INPUT_SELECT_PHYSICAL_KEYBOARD,
+   DISPLAYLIST_DROPDOWN_LIST_INPUT_SELECT_PHYSICAL_KEYBOARD,
 #endif
 #ifdef HAVE_NETWORKING
    DISPLAYLIST_DROPDOWN_LIST_NETPLAY_MITM_SERVER,
@@ -87,7 +95,6 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_CDROM_DETAIL_INFO,
    DISPLAYLIST_INFO,
    DISPLAYLIST_HELP,
-   DISPLAYLIST_HELP_SCREEN_LIST,
    DISPLAYLIST_MAIN_MENU,
    DISPLAYLIST_GENERIC,
    DISPLAYLIST_SETTINGS_ALL,
@@ -120,14 +127,11 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_CORE_MANAGER_STEAM_LIST,
    DISPLAYLIST_CORE_INFORMATION_STEAM_LIST,
 #endif
-#if 0
-/* Thumbnailpack removal */
-   DISPLAYLIST_THUMBNAILS_UPDATER,
-#endif
    DISPLAYLIST_PL_THUMBNAILS_UPDATER,
    DISPLAYLIST_LAKKA,
    DISPLAYLIST_CORES_DETECTED,
    DISPLAYLIST_SAVESTATE_LIST,
+   DISPLAYLIST_STATE_SLOT_RUN,
    DISPLAYLIST_CORE_OPTIONS,
    DISPLAYLIST_CORE_OPTION_OVERRIDE_LIST,
    DISPLAYLIST_CORE_INFO,
@@ -135,7 +139,12 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_PERFCOUNTERS_CORE,
    DISPLAYLIST_PERFCOUNTERS_FRONTEND,
    DISPLAYLIST_SHADER_PASS,
+   DISPLAYLIST_SHADER_PARAMETERS,
+   DISPLAYLIST_SHADER_PARAMETERS_PRESET,
+   DISPLAYLIST_SHADER_PRESET_MANAGER,
    DISPLAYLIST_SHADER_PRESET,
+   DISPLAYLIST_SHADER_PRESET_PREPEND,
+   DISPLAYLIST_SHADER_PRESET_APPEND,
    DISPLAYLIST_DATABASES,
    DISPLAYLIST_DATABASE_PLAYLISTS,
    DISPLAYLIST_DATABASE_PLAYLISTS_HORIZONTAL,
@@ -150,7 +159,6 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_STREAM_CONFIG_FILES,
    DISPLAYLIST_RGUI_THEME_PRESETS,
    DISPLAYLIST_CONFIG_FILES,
-   DISPLAYLIST_CONTENT_HISTORY,
    DISPLAYLIST_IMAGES,
    DISPLAYLIST_FONTS,
    DISPLAYLIST_VIDEO_FONTS,
@@ -161,13 +169,12 @@ enum menu_displaylist_ctl_state
 #endif
    DISPLAYLIST_OVERLAYS,
    DISPLAYLIST_OSK_OVERLAYS,
-   DISPLAYLIST_SHADER_PARAMETERS,
-   DISPLAYLIST_SHADER_PARAMETERS_PRESET,
-   DISPLAYLIST_SHADER_PRESET_SAVE,
-   DISPLAYLIST_SHADER_PRESET_REMOVE,
    DISPLAYLIST_NETWORK_INFO,
    DISPLAYLIST_SYSTEM_INFO,
-   DISPLAYLIST_ACHIEVEMENT_PAUSE_MENU,
+   DISPLAYLIST_DISPLAY_INFO,
+   DISPLAYLIST_DISPLAY_EDID_INFO,
+   DISPLAYLIST_INPUT_INFO,
+   DISPLAYLIST_ACHIEVEMENT_SUBMENU_LIST,
    DISPLAYLIST_ACHIEVEMENT_LIST,
    DISPLAYLIST_USER_BINDS_LIST,
    DISPLAYLIST_ACCOUNTS_LIST,
@@ -180,6 +187,8 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_VIDEO_OUTPUT_SETTINGS_LIST,
    DISPLAYLIST_VIDEO_SCALING_SETTINGS_LIST,
    DISPLAYLIST_VIDEO_HDR_SETTINGS_LIST,
+   DISPLAYLIST_VIDEO_STEREO_SETTINGS_LIST,
+   DISPLAYLIST_VIDEO_DLSS_NR_SETTINGS_LIST,
    DISPLAYLIST_CRT_SWITCHRES_SETTINGS_LIST,
    DISPLAYLIST_VIDEO_SETTINGS_LIST,
    DISPLAYLIST_CONFIGURATION_SETTINGS_LIST,
@@ -202,6 +211,9 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_INPUT_SETTINGS_LIST,
    DISPLAYLIST_INPUT_TURBO_FIRE_SETTINGS_LIST,
    DISPLAYLIST_INPUT_HAPTIC_FEEDBACK_SETTINGS_LIST,
+   DISPLAYLIST_INPUT_SENSOR_SETTINGS_LIST,
+   DISPLAYLIST_NETPLAY_REQUEST_DEVICES_LIST,
+   DISPLAYLIST_NETWORK_REMOTE_USERS_LIST,
    DISPLAYLIST_INPUT_MENU_SETTINGS_LIST,
    DISPLAYLIST_LATENCY_SETTINGS_LIST,
    DISPLAYLIST_INPUT_RETROPAD_BINDS_LIST,
@@ -209,13 +221,22 @@ enum menu_displaylist_ctl_state
 #if defined(HAVE_OVERLAY)
    DISPLAYLIST_ONSCREEN_OVERLAY_SETTINGS_LIST,
    DISPLAYLIST_OSK_OVERLAY_SETTINGS_LIST,
+   DISPLAYLIST_OVERLAY_LIGHTGUN_SETTINGS_LIST,
+   DISPLAYLIST_OVERLAY_MOUSE_SETTINGS_LIST,
 #endif
    DISPLAYLIST_AI_SERVICE_SETTINGS_LIST,
+#ifdef HAVE_SMBCLIENT
+   DISPLAYLIST_SMB_CLIENT_SETTINGS_LIST,
+#endif
+#ifdef HAVE_NFSCLIENT
+   DISPLAYLIST_NFS_CLIENT_SETTINGS_LIST,
+#endif
    DISPLAYLIST_ACCESSIBILITY_SETTINGS_LIST,
    DISPLAYLIST_ONSCREEN_DISPLAY_SETTINGS_LIST,
    DISPLAYLIST_ONSCREEN_NOTIFICATIONS_SETTINGS_LIST,
    DISPLAYLIST_ONSCREEN_NOTIFICATIONS_VIEWS_SETTINGS_LIST,
    DISPLAYLIST_MENU_FILE_BROWSER_SETTINGS_LIST,
+   DISPLAYLIST_MEDIA_PLAYER_SETTINGS_LIST,
    DISPLAYLIST_MENU_VIEWS_SETTINGS_LIST,
    DISPLAYLIST_QUICK_MENU_VIEWS_SETTINGS_LIST,
    DISPLAYLIST_SETTINGS_VIEWS_SETTINGS_LIST,
@@ -237,7 +258,6 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_NETPLAY_KICK_LIST,
    DISPLAYLIST_NETPLAY_BAN_LIST,
    DISPLAYLIST_NETPLAY_LOBBY_FILTERS_LIST,
-   DISPLAYLIST_NETPLAY_LAN_SCAN_SETTINGS_LIST,
    DISPLAYLIST_LAKKA_SERVICES_LIST,
 #ifdef HAVE_LAKKA_SWITCH
    DISPLAYLIST_LAKKA_SWITCH_OPTIONS_LIST,
@@ -249,15 +269,19 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_RECORDING_SETTINGS_LIST,
    DISPLAYLIST_PLAYLIST_SETTINGS_LIST,
    DISPLAYLIST_PLAYLIST_MANAGER_LIST,
+   DISPLAYLIST_ADD_TO_PLAYLIST_LIST,
+   DISPLAYLIST_ADD_TO_PLAYLIST_QUICKMENU,
    DISPLAYLIST_PLAYLIST_MANAGER_SETTINGS,
    DISPLAYLIST_ACCOUNTS_CHEEVOS_LIST,
    DISPLAYLIST_ACCOUNTS_YOUTUBE_LIST,
    DISPLAYLIST_ACCOUNTS_TWITCH_LIST,
    DISPLAYLIST_ACCOUNTS_FACEBOOK_LIST,
+   DISPLAYLIST_ACCOUNTS_KICK_LIST,
    DISPLAYLIST_BROWSE_URL_LIST,
    DISPLAYLIST_BROWSE_URL_START,
    DISPLAYLIST_LOAD_CONTENT_LIST,
    DISPLAYLIST_LOAD_CONTENT_SPECIAL,
+   DISPLAYLIST_MANUAL_CONTENT_SCAN_DIR_LIST,
    DISPLAYLIST_INFORMATION_LIST,
    DISPLAYLIST_INFORMATION,
    DISPLAYLIST_CONTENT_SETTINGS,
@@ -265,7 +289,6 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_OPTIONS_CHEATS,
    DISPLAYLIST_OPTIONS_REMAPPINGS,
    DISPLAYLIST_OPTIONS_REMAPPINGS_PORT,
-   DISPLAYLIST_OPTIONS_MANAGEMENT,
    DISPLAYLIST_OPTIONS_DISK,
    DISPLAYLIST_OPTIONS_SHADERS,
    DISPLAYLIST_OPTIONS_OVERRIDES,
@@ -278,7 +301,6 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_ARCHIVE_ACTION_DETECT_CORE,
    DISPLAYLIST_CORE_CONTENT,
    DISPLAYLIST_CORE_CONTENT_DIRS,
-   DISPLAYLIST_CORE_CONTENT_DIRS_SUBDIR,
    DISPLAYLIST_CORE_SYSTEM_FILES,
 #if defined(HAVE_LIBNX)
    DISPLAYLIST_SWITCH_CPU_PROFILE,
@@ -292,9 +314,16 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_CPU_PERFPOWER_LIST,
    DISPLAYLIST_CPU_POLICY_LIST,
 #endif
-   DISPLAYLIST_PENDING_CLEAR,
-   DISPLAYLIST_SHADER_PRESET_PREPEND,
-   DISPLAYLIST_SHADER_PRESET_APPEND
+#ifdef HAVE_GAME_AI
+   DISPLAYLIST_OPTIONS_GAME_AI,
+#endif
+#ifdef HAVE_SMBCLIENT
+   DISPLAYLIST_OPTIONS_SMB_CLIENT,
+#endif
+#ifdef HAVE_NFSCLIENT
+   DISPLAYLIST_OPTIONS_NFS_CLIENT,
+#endif
+   DISPLAYLIST_PENDING_CLEAR
 };
 
 enum filebrowser_enums
@@ -306,6 +335,7 @@ enum filebrowser_enums
    FILEBROWSER_MANUAL_SCAN_DIR,
    FILEBROWSER_SELECT_FILE,
    FILEBROWSER_SELECT_FILE_SUBSYSTEM,
+   FILEBROWSER_SELECT_OVERLAY,
    FILEBROWSER_SELECT_IMAGE,
    FILEBROWSER_SELECT_VIDEO_FONT,
    FILEBROWSER_SELECT_COLLECTION
@@ -325,7 +355,7 @@ enum menu_dl_flags
    MD_FLAG_DOWNLOAD_CORE                 = (1 << 7), /* Should a 'download core' entry be pushed onto the list?
 						      * This will be set to true in case there are no currently
 						      * installed cores. */
-   MD_FLAG_NEED_NAVIGATION_CLEAR         = (1 << 8)  /* Does the navigation index need to be cleared 
+   MD_FLAG_NEED_NAVIGATION_CLEAR         = (1 << 8)  /* Does the navigation index need to be cleared
                                                       * to 0 (first entry) ? */
 };
 
@@ -352,6 +382,10 @@ bool menu_displaylist_process(menu_displaylist_info_t *info);
 
 void menu_displaylist_info_free(menu_displaylist_info_t *info);
 
+#if defined(RETROARCH_VALIDATION_DUMPS)
+void menu_displaylist_validation_dump(rarch_setting_t *list_settings);
+#endif
+
 unsigned menu_displaylist_build_list(
       file_list_t *list,
       settings_t *settings,
@@ -364,12 +398,36 @@ bool menu_displaylist_ctl(enum menu_displaylist_ctl_state type, menu_displaylist
 
 bool menu_displaylist_has_subsystems(void);
 
+#ifdef HAVE_BLUETOOTH
+/* A Bluetooth scan, its list shown again when it ends. */
+bool menu_displaylist_bluetooth_scan(void);
+#endif
+
 #if defined(HAVE_LIBRETRODB)
 unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings);
 #endif
-unsigned menu_displaylist_contentless_cores(file_list_t *list, settings_t *settings);
+unsigned menu_displaylist_contentless_cores(file_list_t *list,
+      enum menu_contentless_cores_display_type core_display_type);
 
 enum filebrowser_enums filebrowser_get_type(void);
+
+#ifdef HAVE_SMBCLIENT
+/* Writes smb://<server>[/<share>][/<subdir>] into 's', returning false when
+ * the client is disabled or no server is configured. */
+bool menu_displaylist_build_smb_root(char *s, size_t len);
+#endif
+#ifdef HAVE_NFSCLIENT
+bool menu_displaylist_build_nfs_root(char *s, size_t len);
+/* Writes 'path' for a title with the configured export after the server,
+ * returning false when 'path' is not under the configured server or no
+ * export is set. */
+bool menu_displaylist_nfs_title_path(char *s, size_t len, const char *path);
+#endif
+#if defined(HAVE_NFSCLIENT) || defined(HAVE_SMBCLIENT)
+/* True when 'path' is the configured NFS or SMB root without the subdir;
+ * nothing above it can be browsed. */
+bool menu_displaylist_is_network_root(const char *path);
+#endif
 
 void filebrowser_clear_type(void);
 
@@ -381,7 +439,7 @@ int menu_displaylist_parse_settings_enum(
       bool add_empty_entry,
       rarch_setting_t *setting,
       unsigned entry_type,
-      bool is_enum
+      bool is_enum, bool menu_show_advanced_settings
       );
 
 RETRO_END_DECLS

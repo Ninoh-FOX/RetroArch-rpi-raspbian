@@ -17,7 +17,12 @@
 #ifndef __VIDEO_SHADER_PARSE_H
 #define __VIDEO_SHADER_PARSE_H
 
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
 #include <boolean.h>
+#include <retro_atomic.h>
+#include <retro_inline.h>
 #include <retro_common_api.h>
 #include <retro_miscellaneous.h>
 #include <file/config_file.h>
@@ -57,25 +62,6 @@
 
 RETRO_BEGIN_DECLS
 
-enum wildcard_type
-{
-   RARCH_WILDCARD_CONTENT_DIR = 0,
-   RARCH_WILDCARD_CORE, 
-   RARCH_WILDCARD_GAME, 
-   RARCH_WILDCARD_VIDEO_DRIVER,
-   RARCH_WILDCARD_VIDEO_USER_ROTATION,
-   RARCH_WILDCARD_VIDEO_ALLOW_CORE_ROTATION,
-   RARCH_WILDCARD_CORE_REQUESTED_ROTATION,
-   RARCH_WILDCARD_VIDEO_FINAL_ROTATION,
-   RARCH_WILDCARD_SCREEN_ORIENTATION,
-   RARCH_WILDCARD_VIEWPORT_ASPECT_ORIENTATION,
-   RARCH_WILDCARD_CORE_ASPECT_ORIENTATION,
-   RARCH_WILDCARD_PRESET_DIR,
-   RARCH_WILDCARD_PRESET,
-   RARCH_WILDCARD_VIDEO_DRIVER_SHADER_EXT,
-   RARCH_WILDCARD_VIDEO_DRIVER_PRESET_EXT
-};
-
 enum rarch_shader_type
 {
    RARCH_SHADER_NONE = 0,
@@ -104,10 +90,11 @@ enum
 enum video_shader_flags
 {
    SHDR_FLAG_MODERN    = (1 << 0), /* Only used for XML shaders. */
-   /* Indicative of whether shader was modified - 
+   /* Indicative of whether shader was modified -
     * for instance from the menus */
    SHDR_FLAG_MODIFIED  = (1 << 1),
-   SHDR_FLAG_DISABLED  = (1 << 2)
+   SHDR_FLAG_DISABLED  = (1 << 2),
+   SHDR_FLAG_TEMPORARY = (1 << 3)
 };
 
 enum gfx_wrap_type
@@ -123,9 +110,10 @@ enum gfx_wrap_type
 
 enum gfx_fbo_scale_flags
 {
-   FBO_SCALE_FLAG_FP_FBO   = (1 << 0),
-   FBO_SCALE_FLAG_SRGB_FBO = (1 << 1),
-   FBO_SCALE_FLAG_VALID    = (1 << 2)
+   FBO_SCALE_FLAG_FP_FBO    = (1 << 0),
+   FBO_SCALE_FLAG_SRGB_FBO  = (1 << 1),
+   FBO_SCALE_FLAG_VALID     = (1 << 2),
+   FBO_SCALE_FLAG_RGB10_FBO = (1 << 3)
 };
 
 struct gfx_fbo_scale
@@ -139,10 +127,26 @@ struct gfx_fbo_scale
    uint8_t flags;
 };
 
+/* Whether @s, a pass's scale, is the viewport at 1.0 with no render
+ * target format of its own: as the last pass, such a pass draws the
+ * same image straight into the backbuffer as through a target of its
+ * own copied there. */
+#define GFX_FBO_SCALE_IS_VIEWPORT(s) ( \
+         ((s)->flags & (FBO_SCALE_FLAG_VALID | FBO_SCALE_FLAG_FP_FBO \
+            | FBO_SCALE_FLAG_SRGB_FBO | FBO_SCALE_FLAG_RGB10_FBO)) \
+            == FBO_SCALE_FLAG_VALID \
+      && (s)->type_x  == RARCH_SCALE_VIEWPORT \
+      && (s)->type_y  == RARCH_SCALE_VIEWPORT \
+      && (s)->scale_x == 1.0f \
+      && (s)->scale_y == 1.0f)
+
 struct video_shader_parameter
 {
    int pass;
-   float current;
+   /* The value it runs at: the float's bits, set by the frontend while
+    * the video thread reads it each frame. Through
+    * video_shader_param_get() and video_shader_param_set() only. */
+   retro_atomic_int_t current_bits;
    float minimum;
    float initial;
    float maximum;
@@ -151,10 +155,29 @@ struct video_shader_parameter
    char desc[64];
 };
 
+static INLINE float video_shader_param_get(
+      const struct video_shader_parameter *p)
+{
+   int   bits = retro_atomic_load_relaxed_int(
+         (retro_atomic_int_t*)&p->current_bits);
+   float v;
+   memcpy(&v, &bits, sizeof(v));
+   return v;
+}
+
+static INLINE void video_shader_param_set(
+      struct video_shader_parameter *p, float v)
+{
+   int bits;
+   memcpy(&bits, &v, sizeof(bits));
+   retro_atomic_store_relaxed_int(&p->current_bits, bits);
+}
+
 struct rarch_dir_shader_list
 {
    struct string_list *shader_list;
    char *directory;
+   char *failed_apply_loaded_path;
    size_t selection;
    bool shader_loaded;
    bool remember_last_preset_dir;
@@ -173,7 +196,7 @@ struct video_shader_pass
          char *vertex; /* Dynamically allocated. Must be free'd. */
          char *fragment; /* Dynamically allocated. Must be free'd. */
       } string;
-      char path[PATH_MAX_LENGTH];
+      char path[NAME_MAX_LENGTH*2];
    } source;
    char alias[64];
    bool mipmap;
@@ -185,7 +208,7 @@ struct video_shader_lut
    unsigned filter;
    enum gfx_wrap_type wrap;
    char id[64];
-   char path[PATH_MAX_LENGTH];
+   char path[NAME_MAX_LENGTH*2];
    bool mipmap;
 };
 
@@ -213,17 +236,42 @@ struct video_shader
    /* Path to the root preset */
    char path[PATH_MAX_LENGTH];
 
-   /* Path to the original preset loaded, if this is a preset 
-    * with the #reference directive, then this will be different 
+   /* Path to the original preset loaded, if this is a preset
+    * with the #reference directive, then this will be different
     * than the path */
    char loaded_preset_path[PATH_MAX_LENGTH];
+
+   /* Identifies the pass sources 'parameters' was resolved from: one
+    * entry per pass that has a source, in pass order. Appended rather
+    * than placed by alignment, so that it leaves every offset ahead of
+    * it where it was. */
+   int64_t  param_src_mtime[GFX_MAX_SHADERS];
+   int64_t  param_src_size[GFX_MAX_SHADERS];
+   uint32_t param_src_hash[GFX_MAX_SHADERS];
+   unsigned param_src_count;
+   /* 0: legacy; 1/2/3: explicit SDR/PQ/scRGB final-pass encoding. */
+   unsigned hdr_mode;
+   /* The size slang's first pass is told its source has, packed as
+    * VIDEO_SCALE_PACK, or 0 for the real one. Taken from the settings
+    * when the preset is loaded. */
+   unsigned sim_source_dims;
 };
 
-struct wildcard_token
+static INLINE int video_shader_get_hdr_mode(const struct video_shader *shader)
 {
-   enum wildcard_type token_id;
-   char token_name[64];
-};
+   return shader && shader->passes && shader->hdr_mode
+      ? (int)shader->hdr_mode - 1 : -1;
+}
+
+static INLINE bool video_shader_hdr_output_compatible(
+      const struct video_shader *shader, unsigned active_hdr_mode)
+{
+   int mode = video_shader_get_hdr_mode(shader);
+   return mode <= 0 || (unsigned)mode == active_hdr_mode;
+}
+
+bool video_shader_check_hdr_output(
+      const struct video_shader *shader, unsigned output_mode);
 
 /**
  * video_shader_resolve_parameters:
@@ -232,6 +280,11 @@ struct wildcard_token
  *
  * Resolves all shader parameters belonging to shaders
  * from the #pragma parameter lines in the shader for each pass.
+ *
+ * The sources are walked when the set of pass sources, or any of the
+ * files behind it, differs from the one the parameters currently held
+ * came from. Otherwise those parameters stand, reset to their initial
+ * values as a walk would leave them.
  **/
 void video_shader_resolve_parameters(struct video_shader *shader);
 
@@ -255,6 +308,13 @@ bool video_shader_load_current_parameter_values(config_file_t *conf, struct vide
  *
  * Returns: true (1) if successful, otherwise false (0).
  **/
+/* Struct copy of a driver's loaded shader for menu use: everything
+ * but the driver-owned pass source strings, which are cleared in
+ * the copy. Replaces a full re-parse of the preset chain when the
+ * driver has already done it. */
+void video_shader_copy_for_menu(struct video_shader *dst,
+      const struct video_shader *src);
+
 bool video_shader_load_preset_into_shader(const char *path, struct video_shader *shader);
 
 /**
@@ -266,14 +326,12 @@ bool video_shader_load_preset_into_shader(const char *path, struct video_shader 
  * Writes a preset to disk. Can be written as a simple preset (With the #reference directive in it) or a full preset.
  **/
 bool video_shader_write_preset(const char *path,
-      const struct video_shader *shader, 
+      const struct video_shader *shader,
       bool reference);
 
 enum rarch_shader_type video_shader_get_type_from_ext(const char *ext, bool *is_preset);
 
-bool video_shader_is_supported(enum rarch_shader_type type);
-
-bool video_shader_any_supported(void);
+enum display_flags video_shader_type_to_flag(enum rarch_shader_type type);
 
 bool video_shader_check_for_changes(void);
 
@@ -302,13 +360,23 @@ void video_shader_dir_check_shader(
       bool pressed_prev);
 
 bool video_shader_combine_preset_and_apply(
-      settings_t *settings,
       enum rarch_shader_type type,
       struct video_shader *menu_shader,
       const char *preset_path,
       const char *temp_dir,
       bool prepend,
       bool message);
+
+/**
+ * video_shader_get_display_name:
+ * @preset_path          : Path to a shader preset
+ * @shader_dir           : Video shaders directory
+ *
+ * Returns: path of @preset_path relative to @shader_dir if it lies
+ * inside it, otherwise its file name, or NULL if @preset_path is empty.
+ **/
+const char *video_shader_get_display_name(const char *preset_path,
+      const char *shader_dir);
 
 bool video_shader_apply_shader(
       settings_t *settings,
@@ -317,7 +385,109 @@ bool video_shader_apply_shader(
 
 const char *video_shader_get_preset_extension(enum rarch_shader_type type);
 
-void video_shader_toggle(settings_t *settings);
+void video_shader_toggle(settings_t *settings, bool write);
+
+/**
+ * video_shader_source_read:
+ * @ident  : what names the source - a path, as presets carry them
+ * @buf    : receives the bytes, NUL terminated, for the caller to free
+ * @len    : receives their length, not counting the terminator
+ *
+ * Hands a shader driver the bytes it is to compile. The drivers under
+ * gfx/drivers_shader ask for a source by name and are given it; where
+ * those bytes live, and how the name resolves, is decided here and not
+ * by them. The caller owns what comes back, as it did when it read the
+ * file itself.
+ *
+ * Returns: true if the source was found and read.
+ **/
+bool video_shader_source_read(const char *ident, char **buf, int64_t *len);
+
+/**
+ * video_shader_source_resolve:
+ * @parent : what named the source doing the referring, or NULL
+ * @name   : the reference, as it was written in the source
+ * @s      : receives what to ask for with video_shader_source_read()
+ * @len    : size of @s
+ *
+ * Turns a reference inside one source into a name for another. A
+ * shader driver hands back what it read out of an #include line and
+ * gets a name it can ask for; how that resolves - relative to the
+ * referring file, or otherwise - is decided here.
+ *
+ * Returns: true when the reference resolved.
+ **/
+bool video_shader_source_resolve(const char *parent, const char *name,
+      char *s, size_t len);
+
+/**
+ * video_shader_source_ident_name:
+ * @ident : a name video_shader_source_read() would take
+ *
+ * The short name of a source, for the #line directives a preprocessor
+ * writes into what it hands the compiler. Points into @ident.
+ **/
+const char *video_shader_source_ident_name(const char *ident);
+
+/**
+ * video_shader_source_ident_is_slang:
+ * @ident : a name video_shader_source_read() would take
+ *
+ * Whether a source is a slang one, which a preprocessor checks the
+ * #version line of.
+ **/
+bool video_shader_source_ident_is_slang(const char *ident);
+
+/* What a shader driver keeps between runs, by key: the SPIR-V the
+ * slang compiler produced, or a console's precompiled shader binary.
+ * Where it lives is decided here, not by the driver. */
+enum video_shader_cache_kind
+{
+   VIDEO_SHADER_CACHE_SPIRV = 0,
+   VIDEO_SHADER_CACHE_ORBIS_BINARY,
+   /* The Vulkan driver's VkPipelineCache blob, one entry per GPU */
+   VIDEO_SHADER_CACHE_VULKAN_PIPELINE
+};
+
+/* A cache entry's bytes, read-only, until video_shader_cache_unmap() */
+typedef struct video_shader_cache_view
+{
+   const uint8_t *data;
+   int64_t        len;
+   void          *mapped;   /* the file, while its pages are mapped */
+   void          *heap;     /* the copy, where they are read instead */
+} video_shader_cache_view_t;
+
+/**
+ * video_shader_cache_map:
+ * @kind : which cache
+ * @key  : the entry, letters and digits only
+ * @view : receives the bytes
+ *
+ * Hands a shader driver an entry it stored before, mapped where the
+ * platform maps files and read in one go where it does not.
+ *
+ * Returns: true when there is such an entry; then release @view with
+ * video_shader_cache_unmap().
+ **/
+bool video_shader_cache_map(enum video_shader_cache_kind kind,
+      const char *key, video_shader_cache_view_t *view);
+
+void video_shader_cache_unmap(video_shader_cache_view_t *view);
+
+/**
+ * video_shader_cache_write:
+ * @kind : which cache
+ * @key  : the entry, letters and digits only
+ * @data : the bytes, @len of them
+ *
+ * Stores an entry whole, replacing the one there: it is written beside
+ * it and renamed into place, so a reader never sees part of one.
+ *
+ * Returns: true when it was stored.
+ **/
+bool video_shader_cache_write(enum video_shader_cache_kind kind,
+      const char *key, const void *data, size_t len);
 
 RETRO_END_DECLS
 

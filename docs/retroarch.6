@@ -1,6 +1,6 @@
 .\" retroarch.6:
 
-.TH  "RETROARCH" "6" "November 1, 2011" "RETROARCH" "System Manager's Manual: retroarch"
+.TH  "RETROARCH" "6" "January 20, 2025" "RETROARCH" "System Manager's Manual: retroarch"
 
 .SH NAME
 
@@ -62,6 +62,72 @@ If no arguments are passed to retroarch, it is equivalent to calling retroarch w
 Prints available features compiled into RetroArch, then exits.
 
 .TP
+\fB--cloudsync\fR
+Runs a cloud sync with the configured cloud sync driver, then exits.
+
+.TP
+\fB--scan PATH\fR
+Scans the folder or file PATH for content and adds it to playlists, as Manual Scan does.
+Can be given more than once.
+
+.TP
+\fB--scan-refresh NAME|PATH\fR
+Rescans one playlist with the scan settings it saved, as Refresh Playlist does.
+NAME matches a playlist's name exactly first, then ignoring case. PATH must be in the playlist folder.
+Like Refresh Playlist, it drops entries whose files are gone or whose extension the saved settings no longer include.
+A playlist whose saved content folder is missing is skipped instead, so an unplugged drive does not empty it.
+
+.TP
+\fB--scan-refresh-all\fR
+Does --scan-refresh for every playlist that has saved scan settings, as Refresh All Playlists does.
+
+.IP
+These run in the order given, and one that fails does not stop the rest.
+Each prints a totals line on stdout, or its error on stderr.
+Without --menu, RetroArch exits when they are done and does not load content given on the command line.
+The exit status is then 1 if any failed, 0 if any added an entry, and 2 if none added anything; a skipped playlist does not count.
+With --menu, they run while the menu does.
+They cannot be combined with --cloudsync or --command.
+
+.IP
+The options below set the Manual Scan settings of the --scan, --scan-refresh or --scan-refresh-all before them.
+On a refresh they override the saved settings, and the refresh saves them.
+A --scan without any is Fully Automatic.
+
+.TP
+\fB--scan-playlist NAME\fR
+Sets Target Playlist: a database's name, or a custom playlist name. Not allowed on a refresh.
+
+.TP
+\fB--scan-database NAME|first\fR
+Sets Database To Match: the database NAME, or the first database that matches.
+
+.TP
+\fB--scan-match strict|loose|none\fR
+Sets Database Check.
+
+.TP
+\fB--scan-dat FILE\fR
+Sets Arcade DAT File. Matching is strict unless --scan-match loose is given.
+
+.TP
+\fB--scan-core CORE\fR
+Sets Default Core: a core's path, its file name (with or without _libretro and the extension) or its display name.
+
+.TP
+\fB--scan-exts EXTS\fR
+Sets File Extensions, separated by commas or spaces.
+
+.TP
+\fB--scan-no-recursive, --scan-no-archives\fR
+Turn off Scan Recursively and Scan Inside Archives.
+
+.TP
+\fB--scan-overwrite, --scan-validate, --scan-omit-db-ref\fR
+Turn on Overwrite Existing Playlist, Validate Existing Entries and Skip Database References From Playlist.
+They act only when the scan has one playlist, and --scan-overwrite only on a folder; otherwise they print a warning and are ignored.
+
+.TP
 \fB-L PATH, --libretro PATH\fR
 Path to a libretro implementation which is to be used.
 This option will override any setting in a config file.
@@ -109,8 +175,11 @@ A default config file will also be created in the same manner as Unix.
 .TP
 \fB--appendconfig PATH\fR
 Appends a different set of config files to the config file loaded in -c (or default).
-Multiple config files are delimited by ','.
+Multiple config files are delimited by '|'.
 Every config file will be appended in order where the key-value pairs of the next config file takes priority over the old ones.
+
+The appended settings are not kept apart once loaded. Whenever the main config file is saved - on exit, if config_save_on_exit is set, or from the menu - they are written to it with everything else, and are there the next time RetroArch starts without --appendconfig.
+To use an appended config for one session only, put config_save_on_exit = "false" in the appended file.
 
 .TP
 \fB--subsystem SUBSYSTEM\fR
@@ -202,6 +271,7 @@ The command is formatted as "COMMAND;HOST;PORT".
 HOST and PORT are both optional. "COMMAND;HOST" will set PORT to
 "network_cmd_port" default setting.
 If only "COMMAND" is used, HOST and PORT will be assumed to be "localhost" and "network_cmd_port" respectively.
+HOST and PORT are read from the end, and only where they cannot be part of a STEPS list (no space, no "|", not "checkpoint"), so such a list is sent whole.
 
 The available commands are listed if "COMMAND" is invalid.
 
@@ -239,3 +309,54 @@ Disables all kinds of content patching.
 .TP
 \fB-D, --detach\fR
 Detach from the current console. This is currently only relevant for Microsoft Windows.
+
+.SH ENVIRONMENT
+\fBretroarch\fR honors the following environment variables:
+
+.TP
+\fBLIBRETRO_DIRECTORY\fR
+Specify the directory where RetroArch looks for core and info files,
+overriding the value of the "libretro_directory" configuration file
+option.
+
+.TP
+\fBLIBRETRO_ASSETS_DIRECTORY\fR
+Specify the directory where RetroArch looks for assets, overriding
+the value of the "assets_directory" configuration file
+option.
+
+.TP
+\fBLIBRETRO_AUTOCONFIG_DIRECTORY\fR
+Specify the directory where RetroArch looks for controller
+auto-configuration files, overriding the value of the
+"joypad_autoconfig_dir" configuration file option.
+
+.TP
+\fBLIBRETRO_CHEATS_DIRECTORY\fR
+Specify the directory where RetroArch looks for cheat files,
+overriding the value of the "cheat_database_path" configuration file
+option.
+
+.TP
+\fBLIBRETRO_DATABASE_DIRECTORY\fR
+Specify the directory where RetroArch looks for database files,
+overriding the value of the "content_database_path" configuration file
+option.
+
+.TP
+\fBLIBRETRO_SYSTEM_DIRECTORY\fR
+Specify the directory where RetroArch looks for system files,
+overriding the value of the "system_directory" configuration file
+option.
+
+.TP
+\fBLIBRETRO_VIDEO_FILTER_DIRECTORY\fR
+Specify the directory where RetroArch looks for video filters,
+overriding the value of the "video_filter_dir" configuration file
+option.
+
+.TP
+\fBLIBRETRO_VIDEO_SHADER_DIRECTORY\fR
+Specify the directory where RetroArch looks for video shaders,
+overriding the value of the "video_shader_dir" configuration file
+option.

@@ -1,0 +1,94 @@
+include ../../sample_objdir.mk
+
+TARGET := rh264_lossless_test
+# The same oracle built without threads: a decoder path that is right
+# only with HAVE_THREADS - or wrong only without it - shows here.
+TARGET_TEST := rh264_lossless_test_nothreads
+# And built threaded on the volatile atomic backend, which has no
+# pointer atomics: the decoder takes no pool there and decodes alone.
+TARGET_VOLATILE := rh264_lossless_test_volatile
+# The hardware path's sequencing, against a backend that checks it.
+TARGET_HW := rh264_hw_test
+# Savestates: a decoder saved mid-stream and loaded into a new one.
+TARGET_TEST2 := rh264_state_test
+
+LIBRETRO_COMM_DIR := ../../..
+
+SOURCES := \
+	rh264_lossless_test.c \
+	$(LIBRETRO_COMM_DIR)/formats/mp4/rmp4.c \
+	$(LIBRETRO_COMM_DIR)/formats/h264/rh264.c \
+	$(LIBRETRO_COMM_DIR)/rthreads/rthreads.c \
+	$(LIBRETRO_COMM_DIR)/rthreads/retro_eventcount.c \
+	$(LIBRETRO_COMM_DIR)/rthreads/tpool.c
+
+OBJS := $(call sample_objs,$(SOURCES:.c=.o))
+HW_SOURCES := rh264_hw_test.c $(filter-out rh264_lossless_test.c,$(SOURCES))
+HW_OBJS    := $(call sample_objs,$(HW_SOURCES:.c=.o))
+STATE_SOURCES := rh264_state_test.c $(filter-out rh264_lossless_test.c,$(SOURCES))
+STATE_OBJS    := $(call sample_objs,$(STATE_SOURCES:.c=.o))
+NOTHREADS_SOURCES := $(filter-out %/rthreads.c %/retro_eventcount.c %/tpool.c,$(SOURCES))
+NOTHREADS_OBJS    := $(call sample_objs,$(NOTHREADS_SOURCES:.c=.nt.o))
+VOLATILE_OBJS     := $(call sample_objs,$(SOURCES:.c=.vo.o))
+
+# HAVE_THREADS: the oracle decodes every case on a pool as well, and
+# the threaded output has to be the single-thread output to the byte.
+CFLAGS  += -Wall -std=gnu99 -g1 -O1 -DHAVE_RMP4 -DHAVE_RH264 -DHAVE_THREADS -D_GNU_SOURCE \
+           -I$(LIBRETRO_COMM_DIR)/include
+
+# The samples workflow passes SANITIZER=address,undefined to every
+# sample dir; honour it (see formats/jpeg/Makefile).
+ifneq ($(SANITIZER),)
+   CFLAGS  := -fsanitize=$(SANITIZER) -fno-omit-frame-pointer $(CFLAGS)
+   LDFLAGS := -fsanitize=$(SANITIZER) $(LDFLAGS)
+endif
+
+LDLIBS += -lm -lpthread
+
+all: $(TARGET) $(TARGET_TEST) $(TARGET_VOLATILE) $(TARGET_HW) $(TARGET_TEST2)
+
+%.o: %.c
+	$(CC) -c -o $@ $< $(CFLAGS)
+
+$(SAMPLE_OBJDIR)/%.o: $$(call sample_src,$$*).c
+	@mkdir -p $(@D)
+	$(CC) -c -o $@ $< $(CFLAGS)
+
+$(TARGET): $(OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
+$(TARGET_HW): $(HW_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
+$(TARGET_TEST2): $(STATE_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
+%.nt.o: %.c
+	$(CC) -c -o $@ $< $(filter-out -DHAVE_THREADS,$(CFLAGS))
+
+$(SAMPLE_OBJDIR)/%.nt.o: $$(call sample_src,$$*).c
+	@mkdir -p $(@D)
+	$(CC) -c -o $@ $< $(filter-out -DHAVE_THREADS,$(CFLAGS))
+
+$(TARGET_TEST): $(NOTHREADS_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS) $(filter-out -lpthread,$(LDLIBS))
+
+%.vo.o: %.c
+	$(CC) -c -o $@ $< $(CFLAGS) -DRETRO_ATOMIC_FORCE_VOLATILE \
+	   -DRETRO_ATOMIC_SUPPRESS_WARNING
+
+$(SAMPLE_OBJDIR)/%.vo.o: $$(call sample_src,$$*).c
+	@mkdir -p $(@D)
+	$(CC) -c -o $@ $< $(CFLAGS) -DRETRO_ATOMIC_FORCE_VOLATILE \
+	   -DRETRO_ATOMIC_SUPPRESS_WARNING
+
+$(TARGET_VOLATILE): $(VOLATILE_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
+clean:
+	rm -rf $(SAMPLE_OBJDIR)
+	rm -f $(TARGET) $(OBJS) $(TARGET_TEST) $(NOTHREADS_OBJS) \
+	   $(TARGET_VOLATILE) $(VOLATILE_OBJS) $(TARGET_HW) $(HW_OBJS) \
+	   $(TARGET_TEST2) $(STATE_OBJS)
+
+.PHONY: clean

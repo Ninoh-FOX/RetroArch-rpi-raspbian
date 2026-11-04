@@ -13,8 +13,7 @@
 #define RETROACHIEVEMENTS_IMAGE_HOST "https://media.retroachievements.org"
 #define RETROACHIEVEMENTS_HOST_NONSSL "http://retroachievements.org"
 #define RETROACHIEVEMENTS_IMAGE_HOST_NONSSL "http://media.retroachievements.org"
-static char* g_host = NULL;
-static char* g_imagehost = NULL;
+rc_api_host_t g_host = { NULL, NULL };
 
 /* --- rc_json --- */
 
@@ -35,6 +34,24 @@ static void rc_json_skip_whitespace(rc_json_iterator_t* iterator)
 {
   while (iterator->json < iterator->end && isspace((unsigned char)*iterator->json))
     ++iterator->json;
+}
+
+static int rc_json_find_substring(rc_json_iterator_t* iterator, const char* substring)
+{
+  const char first = *substring;
+  const size_t substring_len = strlen(substring);
+  const char* end = iterator->end - substring_len;
+
+  while (iterator->json <= end) {
+    if (*iterator->json == first) {
+      if (memcmp(iterator->json, substring, substring_len) == 0)
+        return 1;
+    }
+
+    ++iterator->json;
+  }
+
+  return 0;
 }
 
 static int rc_json_find_closing_quote(rc_json_iterator_t* iterator)
@@ -237,8 +254,6 @@ int rc_json_get_next_object_field(rc_json_iterator_t* iterator, rc_json_field_t*
 }
 
 int rc_json_get_object_string_length(const char* json) {
-  const char* json_start = json;
-
   rc_json_iterator_t iterator;
   memset(&iterator, 0, sizeof(iterator));
   iterator.json = json;
@@ -246,34 +261,41 @@ int rc_json_get_object_string_length(const char* json) {
 
   rc_json_parse_object(&iterator, NULL, 0, NULL);
 
-  return (int)(iterator.json - json_start);
+  if (iterator.json == json) /* not JSON */
+    return (int)strlen(json);
+
+  return (int)(iterator.json - json);
 }
 
 static int rc_json_extract_html_error(rc_api_response_t* response, const rc_api_server_response_t* server_response) {
-  const char* json = server_response->body;
-  const char* end = json;
+  rc_json_iterator_t iterator;
+  memset(&iterator, 0, sizeof(iterator));
+  iterator.json = server_response->body;
+  iterator.end = server_response->body + server_response->body_length;
 
-  const char* title_start = strstr(json, "<title>");
-  if (title_start) {
-    title_start += 7;
-    if (isdigit((int)*title_start)) {
-      const char* title_end = strstr(title_start + 7, "</title>");
-      if (title_end) {
-        response->error_message = rc_buffer_strncpy(&response->buffer, title_start, title_end - title_start);
-        response->succeeded = 0;
-        return RC_INVALID_JSON;
-      }
+  /* assume the title contains the most appropriate message to display to the user */
+  if (rc_json_find_substring(&iterator, "<title>")) {
+    const char* title_start = iterator.json + 7;
+    if (rc_json_find_substring(&iterator, "</title>")) {
+      response->error_message = rc_buffer_strncpy(&response->buffer, title_start, iterator.json - title_start);
+      response->succeeded = 0;
+      return RC_INVALID_JSON;
     }
   }
 
-  while (*end && *end != '\n' && end - json < 200)
-    ++end;
+  /* title not found, return the first line of the response (up to 200 characters) */
+  iterator.json = server_response->body;
 
-  if (end > json && end[-1] == '\r')
-    --end;
+  while (iterator.json < iterator.end && *iterator.json != '\n' &&
+         iterator.json - server_response->body < 200) {
+    ++iterator.json;
+  }
 
-  if (end > json)
-    response->error_message = rc_buffer_strncpy(&response->buffer, json, end - json);
+  if (iterator.json > server_response->body && iterator.json[-1] == '\r')
+    --iterator.json;
+
+  if (iterator.json > server_response->body)
+    response->error_message = rc_buffer_strncpy(&response->buffer, server_response->body, iterator.json - server_response->body);
 
   response->succeeded = 0;
   return RC_INVALID_JSON;
@@ -295,6 +317,18 @@ static int rc_json_convert_error_code(const char* server_error_code)
     case 'i':
       if (strcmp(server_error_code, "invalid_credentials") == 0)
         return RC_INVALID_CREDENTIALS;
+      if (strcmp(server_error_code, "invalid_parameter") == 0)
+        return RC_INVALID_STATE;
+      break;
+
+    case 'm':
+      if (strcmp(server_error_code, "missing_parameter") == 0)
+        return RC_INVALID_STATE;
+      break;
+
+    case 'n':
+      if (strcmp(server_error_code, "not_found") == 0)
+        return RC_NOT_FOUND;
       break;
 
     default:
@@ -326,7 +360,7 @@ int rc_json_parse_server_response(rc_api_response_t* response, const rc_api_serv
   if (server_response->http_status_code == RC_API_SERVER_RESPONSE_CLIENT_ERROR ||
       server_response->http_status_code == RC_API_SERVER_RESPONSE_RETRYABLE_CLIENT_ERROR) {
     /* client provided error message is passed as the response body */
-    response->error_message = server_response->body;
+    response->error_message = rc_buffer_strncpy(&response->buffer, server_response->body, server_response->body_length);
     response->succeeded = 0;
     return RC_NO_RESPONSE;
   }
@@ -433,17 +467,12 @@ static int rc_json_get_array_entry_value(rc_json_field_t* field, rc_json_iterato
   return 1;
 }
 
-int rc_json_get_required_unum_array(uint32_t** entries, uint32_t* num_entries, rc_api_response_t* response, const rc_json_field_t* field, const char* field_name) {
-  rc_json_iterator_t iterator;
-  rc_json_field_t array;
-  rc_json_field_t value;
-  uint32_t* entry;
-
-  memset(&array, 0, sizeof(array));
-  if (!rc_json_get_required_array(num_entries, &array, response, field, field_name))
-    return RC_MISSING_VALUE;
-
+static int rc_json_get_unum_array(uint32_t** entries, uint32_t* num_entries, rc_api_response_t* response, const rc_json_field_t* array, const char* field_name) {
   if (*num_entries) {
+    rc_json_iterator_t iterator;
+    rc_json_field_t value;
+    uint32_t* entry;
+
     *entries = (uint32_t*)rc_buffer_alloc(&response->buffer, *num_entries * sizeof(uint32_t));
     if (!*entries)
       return RC_OUT_OF_MEMORY;
@@ -451,8 +480,8 @@ int rc_json_get_required_unum_array(uint32_t** entries, uint32_t* num_entries, r
     value.name = field_name;
 
     memset(&iterator, 0, sizeof(iterator));
-    iterator.json = array.value_start;
-    iterator.end = array.value_end;
+    iterator.json = array->value_start;
+    iterator.end = array->value_end;
 
     entry = *entries;
     while (rc_json_get_array_entry_value(&value, &iterator)) {
@@ -467,6 +496,77 @@ int rc_json_get_required_unum_array(uint32_t** entries, uint32_t* num_entries, r
   }
 
   return RC_OK;
+}
+
+int rc_json_get_required_unum_array(uint32_t** entries, uint32_t* num_entries, rc_api_response_t* response, const rc_json_field_t* field, const char* field_name) {
+  rc_json_field_t array;
+  memset(&array, 0, sizeof(array));
+
+  if (!rc_json_get_required_array(num_entries, &array, response, field, field_name))
+    return RC_MISSING_VALUE;
+
+  return rc_json_get_unum_array(entries, num_entries, response, &array, field_name);
+}
+
+int rc_json_get_optional_unum_array(uint32_t** entries, uint32_t* num_entries, rc_api_response_t* response, const rc_json_field_t* field, const char* field_name) {
+  rc_json_field_t array;
+  memset(&array, 0, sizeof(array));
+
+  if (!rc_json_get_optional_array(num_entries, &array, field, field_name))
+    *num_entries = 0;
+
+  return rc_json_get_unum_array(entries, num_entries, response, &array, field_name);
+}
+
+static int rc_json_get_string_array(const char*** entries, uint32_t* num_entries, rc_api_response_t* response, const rc_json_field_t* array, const char* field_name) {
+  if (*num_entries) {
+    rc_json_iterator_t iterator;
+    rc_json_field_t value;
+    const char** entry;
+
+    *entries = (const char**)rc_buffer_alloc(&response->buffer, *num_entries * sizeof(const char*));
+    if (!*entries)
+      return RC_OUT_OF_MEMORY;
+
+    value.name = field_name;
+
+    memset(&iterator, 0, sizeof(iterator));
+    iterator.json = array->value_start;
+    iterator.end = array->value_end;
+
+    entry = *entries;
+    while (rc_json_get_array_entry_value(&value, &iterator)) {
+      if (!rc_json_get_string(entry, &response->buffer, &value, field_name))
+        return RC_MISSING_VALUE;
+
+      ++entry;
+    }
+  }
+  else {
+    *entries = NULL;
+  }
+
+  return RC_OK;
+}
+
+int rc_json_get_required_string_array(const char*** entries, uint32_t* num_entries, rc_api_response_t* response, const rc_json_field_t* field, const char* field_name) {
+  rc_json_field_t array;
+
+  memset(&array, 0, sizeof(array));
+  if (!rc_json_get_required_array(num_entries, &array, response, field, field_name))
+    return RC_MISSING_VALUE;
+
+  return rc_json_get_string_array(entries, num_entries, response, &array, field_name);
+}
+
+int rc_json_get_optional_string_array(const char*** entries, uint32_t* num_entries, rc_api_response_t* response, const rc_json_field_t* field, const char* field_name) {
+  rc_json_field_t array;
+
+  memset(&array, 0, sizeof(array));
+  if (!rc_json_get_optional_array(num_entries, &array, field, field_name))
+    *num_entries = 0;
+
+  return rc_json_get_string_array(entries, num_entries, response, &array, field_name);
 }
 
 int rc_json_get_required_array(uint32_t* num_entries, rc_json_field_t* array_field, rc_api_response_t* response, const rc_json_field_t* field, const char* field_name) {
@@ -589,6 +689,12 @@ int rc_json_get_string(const char** out, rc_buffer_t* buffer, const rc_json_fiel
     return 0;
   }
 
+  if (len == 0) {
+    /* simple optimization for empty string - don't allocate space */
+    *out = "";
+    return 1;
+  }
+
   if (len == 4 && memcmp(field->value_start, "null", 4) == 0) {
     *out = NULL;
     return 1;
@@ -624,7 +730,11 @@ int rc_json_get_string(const char** out, rc_buffer_t* buffer, const rc_json_fiel
 
         if (*src == 'u') {
           /* unicode character */
-          uint32_t ucs32_char = rc_json_decode_hex4(src + 1);
+          uint32_t ucs32_char;
+          if (src + 5 >= field->value_end) /* incomplete unicode character */
+            return 0;
+
+          ucs32_char = rc_json_decode_hex4(src + 1);
           src += 5;
 
           if (ucs32_char >= 0xD800 && ucs32_char < 0xE000) {
@@ -671,6 +781,57 @@ int rc_json_get_string(const char** out, rc_buffer_t* buffer, const rc_json_fiel
   *dst++ = '\0';
   rc_buffer_consume(buffer, (uint8_t*)(*out), (uint8_t*)dst);
   return 1;
+}
+
+int rc_json_field_string_matches(const rc_json_field_t* field, const char* text) {
+  int is_quoted = 0;
+  const char* ptr = field->value_start;
+  if (!ptr || !text)
+    return 0;
+
+  if (*ptr == '"') {
+    is_quoted = 1;
+    ++ptr;
+  }
+
+  while (ptr < field->value_end) {
+    if (*ptr != *text) {
+      if (*ptr != '\\') {
+        if (*ptr == '"' && is_quoted && (*text == '\0')) {
+          is_quoted = 0;
+          ++ptr;
+          continue;
+        }
+
+        return 0;
+      }
+
+      ++ptr;
+      switch (*ptr) {
+        case 'n':
+          if (*text != '\n')
+            return 0;
+          break;
+        case 'r':
+          if (*text != '\r')
+            return 0;
+          break;
+        case 't':
+          if (*text != '\t')
+            return 0;
+          break;
+        default:
+          if (*text != *ptr)
+            return 0;
+          break;
+      }
+    }
+
+    ++text;
+    ++ptr;
+  }
+
+  return !is_quoted && (*text == '\0');
 }
 
 void rc_json_get_optional_string(const char** out, rc_api_response_t* response, const rc_json_field_t* field, const char* field_name, const char* default_value) {
@@ -839,10 +1000,13 @@ int rc_json_get_datetime(time_t* out, const rc_json_field_t* field, const char* 
   (void)field_name;
 #endif
 
-  if (*field->value_start == '\"') {
+  if (field->value_start && *field->value_start == '\"') {
     memset(&tm, 0, sizeof(tm));
-    if (sscanf_s(field->value_start + 1, "%d-%d-%d %d:%d:%d",
-        &tm.tm_year, &tm.tm_mon, &tm.tm_mday, &tm.tm_hour, &tm.tm_min, &tm.tm_sec) == 6) {
+    if (sscanf_s(field->value_start + 1, "%d-%d-%d %d:%d:%d", /* DB format "2013-10-20 22:12:21" */
+                 &tm.tm_year, &tm.tm_mon, &tm.tm_mday, &tm.tm_hour, &tm.tm_min, &tm.tm_sec) == 6 ||
+        /* NOTE: relies on sscanf stopping when it sees a non-digit after the seconds. could be 'Z', '.', '+', or '-' */
+        sscanf_s(field->value_start + 1, "%d-%d-%dT%d:%d:%d", /* ISO format "2013-10-20T22:12:21.000000Z */
+                 &tm.tm_year, &tm.tm_mon, &tm.tm_mday, &tm.tm_hour, &tm.tm_min, &tm.tm_sec) == 6) {
       tm.tm_mon--; /* 0-based */
       tm.tm_year -= 1900; /* 1900 based */
 
@@ -870,6 +1034,61 @@ int rc_json_get_datetime(time_t* out, const rc_json_field_t* field, const char* 
 
 int rc_json_get_required_datetime(time_t* out, rc_api_response_t* response, const rc_json_field_t* field, const char* field_name) {
   if (rc_json_get_datetime(out, field, field_name))
+    return 1;
+
+  return rc_json_missing_field(response, field);
+}
+
+int rc_json_get_timet(time_t* out, const rc_json_field_t* field, const char* field_name)
+{
+  const char* src = field->value_start;
+  int64_t value = 0;
+  int negative = 0;
+
+#ifndef NDEBUG
+  if (strcmp(field->name, field_name) != 0)
+    return 0;
+#else
+  (void)field_name;
+#endif
+
+  if (!src) {
+    *out = 0;
+    return 0;
+  }
+
+  /* assert: string contains only numerals and an optional sign per rc_json_parse_field */
+  if (*src == '-') {
+    negative = 1;
+    ++src;
+  } else if (*src == '+') {
+    ++src;
+  } else if (*src < '0' || *src > '9') {
+    *out = 0;
+    return 0;
+  }
+
+  while (src < field->value_end && *src != '.') {
+    value *= 10;
+    value += *src - '0';
+    ++src;
+  }
+
+  if (negative)
+    *out = (time_t)-value;
+  else
+    *out = (time_t)value;
+
+  return 1;
+}
+
+void rc_json_get_optional_timet(time_t* out, const rc_json_field_t* field, const char* field_name, time_t default_value) {
+  if (!rc_json_get_timet(out, field, field_name))
+    *out = default_value;
+}
+
+int rc_json_get_required_timet(time_t* out, rc_api_response_t* response, const rc_json_field_t* field, const char* field_name) {
+  if (rc_json_get_timet(out, field, field_name))
     return 1;
 
   return rc_json_missing_field(response, field);
@@ -913,6 +1132,29 @@ int rc_json_get_required_bool(int* out, rc_api_response_t* response, const rc_js
     return 1;
 
   return rc_json_missing_field(response, field);
+}
+
+void rc_json_extract_filename(rc_json_field_t* field) {
+  if (field->value_end && field->value_end > field->value_start) {
+    const char* str = field->value_end;
+    if (str[-1] == '"') {
+      /* ignore trailing quote */
+      field->value_end = --str;
+
+      while (str > field->value_start) {
+        const char c = *(--str);
+        if (c == '.') {
+          /* found an extension. remove it */
+          field->value_end = str;
+        }
+        else if (c == '/' || c == '"') {
+          /* found path separator or opening quote. stop */
+          field->value_start = str + 1;
+          break;
+        }
+      }
+    }
+  }
 }
 
 /* --- rc_api_request --- */
@@ -1081,21 +1323,25 @@ void rc_url_builder_append_str_param(rc_api_url_builder_t* builder, const char* 
   rc_url_builder_append_encoded_str(builder, value);
 }
 
-void rc_api_url_build_dorequest_url(rc_api_request_t* request) {
+void rc_api_url_build_dorequest_url(rc_api_request_t* request, const rc_api_host_t* host) {
   #define DOREQUEST_ENDPOINT "/dorequest.php"
   rc_buffer_init(&request->buffer);
 
-  if (!g_host) {
+  if (!host || !host->host) {
     request->url = RETROACHIEVEMENTS_HOST DOREQUEST_ENDPOINT;
   }
   else {
     const size_t endpoint_len = sizeof(DOREQUEST_ENDPOINT);
-    const size_t host_len = strlen(g_host);
-    const size_t url_len = host_len + endpoint_len;
+    const size_t host_len = strlen(host->host);
+    const size_t protocol_len = (strstr(host->host, "://")) ? 0 : 7;
+    const size_t url_len = protocol_len + host_len + endpoint_len;
     uint8_t* url = rc_buffer_reserve(&request->buffer, url_len);
 
-    memcpy(url, g_host, host_len);
-    memcpy(url + host_len, DOREQUEST_ENDPOINT, endpoint_len);
+    if (protocol_len)
+      memcpy(url, "http://", protocol_len);
+
+    memcpy(url + protocol_len, host->host, host_len);
+    memcpy(url + protocol_len + host_len, DOREQUEST_ENDPOINT, endpoint_len);
     rc_buffer_consume(&request->buffer, url, url + url_len);
 
     request->url = (char*)url;
@@ -1118,9 +1364,9 @@ int rc_api_url_build_dorequest(rc_api_url_builder_t* builder, const char* api, c
 
 /* --- Set Host --- */
 
-static void rc_api_update_host(char** host, const char* hostname) {
+static void rc_api_update_host(const char** host, const char* hostname) {
   if (*host != NULL)
-    free(*host);
+    free((void*)*host);
 
   if (hostname != NULL) {
     if (strstr(hostname, "://")) {
@@ -1149,8 +1395,15 @@ static void rc_api_update_host(char** host, const char* hostname) {
   }
 }
 
+const char* rc_api_default_host(void) {
+  return RETROACHIEVEMENTS_HOST;
+}
+
 void rc_api_set_host(const char* hostname) {
-  rc_api_update_host(&g_host, hostname);
+  if (hostname && strcmp(hostname, RETROACHIEVEMENTS_HOST) == 0)
+    hostname = NULL;
+
+  rc_api_update_host(&g_host.host, hostname);
 
   if (!hostname) {
     /* also clear out the image hostname */
@@ -1164,24 +1417,48 @@ void rc_api_set_host(const char* hostname) {
 }
 
 void rc_api_set_image_host(const char* hostname) {
-  rc_api_update_host(&g_imagehost, hostname);
+  rc_api_update_host(&g_host.media_host, hostname);
 }
 
 /* --- Fetch Image --- */
 
 int rc_api_init_fetch_image_request(rc_api_request_t* request, const rc_api_fetch_image_request_t* api_params) {
+  return rc_api_init_fetch_image_request_hosted(request, api_params, &g_host);
+}
+
+int rc_api_init_fetch_image_request_hosted(rc_api_request_t* request, const rc_api_fetch_image_request_t* api_params, const rc_api_host_t* host) {
   rc_api_url_builder_t builder;
+
+  if (!api_params->image_name || !api_params->image_name[0])
+    return RC_INVALID_STATE;
 
   rc_buffer_init(&request->buffer);
   rc_url_builder_init(&builder, &request->buffer, 64);
 
-  if (g_imagehost) {
-    rc_url_builder_append(&builder, g_imagehost, strlen(g_imagehost));
+  if (host && host->media_host) {
+    /* custom media host provided */
+    if (!strstr(host->media_host, "://"))
+      rc_url_builder_append(&builder, "http://", 7);
+    rc_url_builder_append(&builder, host->media_host, strlen(host->media_host));
   }
-  else if (g_host) {
-    rc_url_builder_append(&builder, g_host, strlen(g_host));
+  else if (host && host->host) {
+    if (strcmp(host->host, RETROACHIEVEMENTS_HOST_NONSSL) == 0) {
+      /* if host specifically set to non-ssl host, and no media host provided, use non-ssl media host */
+      rc_url_builder_append(&builder, RETROACHIEVEMENTS_IMAGE_HOST_NONSSL, sizeof(RETROACHIEVEMENTS_IMAGE_HOST_NONSSL) - 1);
+    }
+    else if (strcmp(host->host, RETROACHIEVEMENTS_HOST) == 0) {
+      /* if host specifically set to ssl host, and no media host provided, use media host */
+      rc_url_builder_append(&builder, RETROACHIEVEMENTS_IMAGE_HOST, sizeof(RETROACHIEVEMENTS_IMAGE_HOST) - 1);
+    }
+    else {
+      /* custom host and no media host provided. assume custom host is also media host */
+      if (!strstr(host->host, "://"))
+        rc_url_builder_append(&builder, "http://", 7);
+      rc_url_builder_append(&builder, host->host, strlen(host->host));
+    }
   }
   else {
+    /* no custom host provided */
     rc_url_builder_append(&builder, RETROACHIEVEMENTS_IMAGE_HOST, sizeof(RETROACHIEVEMENTS_IMAGE_HOST) - 1);
   }
 
@@ -1217,6 +1494,23 @@ int rc_api_init_fetch_image_request(rc_api_request_t* request, const rc_api_fetc
 
   request->url = rc_url_builder_finalize(&builder);
   request->post_data = NULL;
+  request->content_type = NULL;
 
   return builder.result;
+}
+
+const char* rc_api_build_avatar_url(rc_buffer_t* buffer, uint32_t image_type, const char* image_name) {
+  rc_api_fetch_image_request_t image_request;
+  rc_api_request_t request;
+  int result;
+
+  memset(&image_request, 0, sizeof(image_request));
+  image_request.image_type = image_type;
+  image_request.image_name = image_name;
+
+  result = rc_api_init_fetch_image_request(&request, &image_request);
+  if (result == RC_OK)
+    return rc_buffer_strcpy(buffer, request.url);
+
+  return NULL;
 }

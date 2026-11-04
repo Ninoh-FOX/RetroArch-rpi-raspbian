@@ -172,8 +172,8 @@ struct retro_hw_render_context_negotiation_interface_vulkan
     * of the frontend is destroyed if create_device was called successfully so that the core has a chance of
     * tearing down its own device resources.
     *
-    * Only auxillary resources should be freed here, i.e. resources which are not part of retro_vulkan_context.
-    * v2: Auxillary instance resources created during create_instance can also be freed here.
+    * Only auxiliary resources should be freed here, i.e. resources which are not part of retro_vulkan_context.
+    * v2: Auxiliary instance resources created during create_instance can also be freed here.
     */
    retro_vulkan_destroy_device_t destroy_device;
 
@@ -324,7 +324,7 @@ struct retro_hw_render_interface_vulkan
     *
     * Images passed to set_image should be created with TILING_OPTIMAL.
     * The image layout should be transitioned to either
-    * VK_IMAGE_LAYOUT_GENERIC or VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
+    * VK_IMAGE_LAYOUT_GENERAL or VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
     * The actual image layout used must be set in image_layout.
     *
     * The image must be a 2D texture which may or not be layered
@@ -351,7 +351,18 @@ struct retro_hw_render_interface_vulkan
     * so that the frontend can reuse the older pointer.
     *
     * The image itself however, must not be touched by the core until
-    * wait_sync_index has been completed later. The frontend may perform
+    * wait_sync_index has been completed later - and that includes
+    * destroying it, or releasing the last reference that keeps it
+    * alive. The frontend reads the image on its own schedule: on a
+    * threaded video path that is a frame or more after set_image,
+    * under fast-forward many frames after, so an image whose lifetime
+    * is only "until the next set_image" is read after it is gone - a
+    * GPU page fault and a lost device. The core keeps every image it
+    * hands over until wait_sync_index for the sync index it was handed
+    * at has returned: one image per set bit of get_sync_index_mask
+    * suffices.
+    *
+    * The frontend may perform
     * layout transitions on the image, so even read-only access is not defined.
     * The exception to read-only rule is if GENERAL layout is used for the image.
     * In this case, the frontend is not allowed to perform any layout transitions,
@@ -373,7 +384,7 @@ struct retro_hw_render_interface_vulkan
     * The frontend will always release ownership back to src_queue_family.
     * Waiting for frontend to complete with wait_sync_index() ensures that
     * the frontend has released ownership back to the application.
-    * Note that in Vulkan, transfering ownership is a two-part process.
+    * Note that in Vulkan, transferring ownership is a two-part process.
     *
     * Example frame:
     *  - core releases ownership from src_queue_index to queue_index with VkImageMemoryBarrier.
@@ -431,7 +442,7 @@ struct retro_hw_render_interface_vulkan
     *
     * While this value will typically remain constant throughout the
     * applications lifecycle, it may for example change if the frontend
-    * suddently changes fullscreen state and/or latency.
+    * suddenly changes fullscreen state and/or latency.
     *
     * If this value ever changes, it is safe to assume that the device
     * is completely idle and all synchronization objects can be deleted

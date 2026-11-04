@@ -45,7 +45,6 @@ enum default_dirs
    DEFAULT_DIR_PORT,
    DEFAULT_DIR_SHADER,
    DEFAULT_DIR_SAVESTATE,
-   DEFAULT_DIR_RESAMPLER,
    DEFAULT_DIR_SRAM,
    DEFAULT_DIR_SCREENSHOT,
    DEFAULT_DIR_SYSTEM,
@@ -72,25 +71,30 @@ struct defaults
 #ifndef IS_SALAMANDER
    playlist_t *content_history;
    playlist_t *content_favorites;
-#ifdef HAVE_IMAGEVIEWER
+#if defined(HAVE_IMAGEVIEWER) || defined(HAVE_MENU)
    playlist_t *image_history;
 #endif
    playlist_t *music_history;
-#if defined(HAVE_FFMPEG) || defined(HAVE_MPV)
+#if defined(HAVE_FFMPEG) || defined(HAVE_MPV) || defined(HAVE_WEBMPLAYER)
    playlist_t *video_history;
 #endif
 #endif
    int settings_out_latency;
    int settings_in_latency;
+   /* Device-optimal audio output parameters supplied by the
+    * frontend; 0 means the frontend has no opinion and the
+    * built-in defaults apply. */
+   int settings_out_sample_rate;
+   int settings_out_block_frames;
 #ifdef HAVE_MENU
    unsigned menu_materialui_menu_color_theme;
 #endif
 
    float settings_video_refresh_rate;
 
-   char dirs [DEFAULT_DIR_LAST + 1][PATH_MAX_LENGTH];
+   char dirs [DEFAULT_DIR_LAST + 1][DIR_MAX_LENGTH];
    char path_config[PATH_MAX_LENGTH];
-   char path_buildbot_server_url[255];
+   char path_buildbot_server_url[NAME_MAX_LENGTH];
    char settings_menu[32];
 
 #ifdef HAVE_MENU

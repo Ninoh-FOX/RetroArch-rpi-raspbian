@@ -13,7 +13,11 @@
 * If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifdef IOS
+#ifdef __MACH__
+#include <TargetConditionals.h>
+#endif
+
+#if TARGET_OS_IPHONE
 #include <Availability.h>
 #else
 #include <AvailabilityMacros.h>
@@ -23,13 +27,22 @@
 #define __IPHONE_OS_VERSION_MAX_ALLOWED 00000
 #endif
 
-#if defined(__APPLE__) && defined(__MACH__)
-#include "../frontend/drivers/platform_darwin.m"
+#if defined(HAVE_ZLIB) || defined(HAVE_7ZIP)
+#define HAVE_COMPRESSION 1
 #endif
 
-#if defined(HAVE_COCOATOUCH) || defined(HAVE_COCOA) || defined(HAVE_COCOA_METAL)
+#include "../gfx/display_servers/dispserv_apple.m"
+
+#if defined(HAVE_COCOATOUCH) || defined(HAVE_COCOA)
 
 #include "../ui/drivers/cocoa/cocoa_common.m"
+#ifdef HAVE_RETROARCH_PLAYLIST_MANAGER
+/* RetroArchPlaylistManager uses Obj-C lightweight generics and
+ * nullability macros (Xcode 7+, 2015).  Usable on iOS/tvOS and
+ * modern macOS, not on older macOS SDKs.  Flag is synthesized
+ * in cocoa_common.h for non-qb builds; set directly by qb. */
+#include "../ui/drivers/cocoa/RetroArchPlaylistManager.m"
+#endif
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
 #include "../gfx/drivers_context/cocoa_gl_ctx.m"
 #endif
@@ -37,8 +50,9 @@
 #include "../gfx/drivers_context/cocoa_vk_ctx.m"
 #endif
 
-#if defined(OSX)
+#if TARGET_OS_OSX
 #include "../ui/drivers/ui_cocoa.m"
+#include "../ui/drivers/ui_cocoa_companion.m"
 #else
 #include "../ui/drivers/ui_cocoatouch.m"
 #endif
@@ -51,19 +65,37 @@
 #include "../input/drivers_joypad/mfi_joypad.m"
 #endif
 
-#ifdef HAVE_COREAUDIO3
-#include "../audio/drivers/coreaudio3.m"
+#if defined(__APPLE__) && defined(__MACH__)
+#include "../frontend/drivers/platform_darwin.m"
 #endif
 
-#if defined(HAVE_DISCORD)
-#include "../deps/discord-rpc/src/discord_register_osx.m"
+#ifdef HAVE_CORELOCATION
+#include "../location/drivers/corelocation.m"
+#endif
+
+#ifdef HAVE_AVF
+#include "../camera/drivers/avfoundation.m"
+#include "../record/drivers/record_avfoundation.m"
 #endif
 
 #ifdef HAVE_METAL
-#import "../gfx/common/metal/metal_renderer.m"
 #import "../gfx/drivers/metal.m"
+#ifdef HAVE_RECORD_METAL
+#include "../record/record_gpu_capture_metal.m"
+#include "../record/record_mux_avfoundation.m"
+#include "../record/record_gpu_session_metal.m"
+#include "../record/record_gpu_dispatch_metal.m"
+#endif
 #endif
 
 #if defined(HAVE_NETWORKING) && defined(HAVE_NETPLAYDISCOVERY) && defined(HAVE_NETPLAYDISCOVERY_NSNET)
 #import "../network/netplay/netplay_nsnetservice.m"
+#endif
+
+#if defined(HAVE_CLOUDSYNC) && defined(HAVE_ICLOUD)
+#include "../network/cloud_sync/icloud.m"
+#endif
+
+#if defined(HAVE_CLOUDSYNC) && defined(HAVE_ICLOUD_DRIVE)
+#include "../network/cloud_sync/icloud_drive.m"
 #endif

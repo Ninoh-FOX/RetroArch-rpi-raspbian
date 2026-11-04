@@ -33,7 +33,7 @@ NS_ASSUME_NONNULL_BEGIN
  *  The GCDWebServerBodyReaderCompletionBlock is passed by GCDWebServer to the
  *  GCDWebServerBodyReader object when reading data from it asynchronously.
  */
-typedef void (^GCDWebServerBodyReaderCompletionBlock)(NSData* data, NSError* _Nullable error);
+typedef void (^GCDWebServerBodyReaderCompletionBlock)(NSData* _Nullable data, NSError* _Nullable error);
 
 /**
  *  This protocol is used by the GCDWebServerConnection to communicate with
@@ -138,7 +138,7 @@ typedef void (^GCDWebServerBodyReaderCompletionBlock)(NSData* data, NSError* _Nu
  *
  *  The default value is nil.
  */
-@property(nonatomic, nullable) NSDate* lastModifiedDate;
+@property(nonatomic, strong, nullable) NSDate* lastModifiedDate;
 
 /**
  *  Sets the ETag for the response using the "ETag" header.

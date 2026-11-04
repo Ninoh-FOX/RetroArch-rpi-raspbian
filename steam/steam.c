@@ -6,6 +6,7 @@
 #include <retro_timers.h>
 #include <compat/strl.h>
 #include <string/stdstring.h>
+#include <retro_miscellaneous.h>
 
 #include "../input/input_driver.h"
 #include "../menu/menu_driver.h"
@@ -27,9 +28,12 @@ void steam_init(void)
    MistResult result = mist_subprocess_init();
 
    if (MIST_IS_SUCCESS(result))
+   {
       mist_initialized = true;
+      runloop_frame_work_set(RUNLOOP_WORK_PRESENCE, true);
+   }
    else
-      RARCH_ERR("[Steam]: Failed to initialize mist subprocess (%d-%d)\n", MIST_UNPACK_RESULT(result));
+      RARCH_ERR("[Steam] Failed to initialize mist subprocess (%d-%d).\n", MIST_UNPACK_RESULT(result));
 }
 
 void steam_poll(void)
@@ -46,7 +50,7 @@ void steam_poll(void)
       if (has_poll_errored)
          return;
 
-      RARCH_ERR("[Steam]: Error polling (%d-%d)\n", MIST_UNPACK_RESULT(result));
+      RARCH_ERR("[Steam] Error polling (%d-%d).\n", MIST_UNPACK_RESULT(result));
 
       has_poll_errored = true;
    }
@@ -61,7 +65,11 @@ void steam_poll(void)
       {
          /* Reload core info and Steam Core DLC mappings */
          case MistCallback_DlcInstalled:
-            command_event(CMD_EVENT_CORE_INFO_INIT, NULL);
+            {
+               /* Forced: a core file changed on disk */
+               bool refresh = true;
+               command_event(CMD_EVENT_CORE_INFO_INIT, &refresh);
+            }
             steam_get_core_dlcs(&core_dlc_list, false);
             break;
          /* The Steam OSK is dismissed */
@@ -145,7 +153,7 @@ core_info_t* steam_find_core_info_for_dlc(const char* name)
 
    for (i = 0; core_info_list->count > i; i++)
    {
-      char core_info_name[256];
+      char core_info_name[NAME_MAX_LENGTH];
       core_info_t *core_info   = core_info_get(core_info_list, i);
       /* Find the opening parenthesis for the core name */
       char *start              = strchr(core_info->display_name, '(');
@@ -174,7 +182,7 @@ core_info_t* steam_find_core_info_for_dlc(const char* name)
 }
 
 /* Generate a list with core dlcs
- * Needs to be called after initializion because it uses core info */
+ * Needs to be called after initialization because it uses core info */
 MistResult steam_generate_core_dlcs_list(steam_core_dlc_list_t **list)
 {
    int count, i;
@@ -266,7 +274,8 @@ steam_core_dlc_t* steam_get_core_dlc_by_name(
 
 void steam_install_core_dlc(steam_core_dlc_t *core_dlc)
 {
-   char msg[PATH_MAX_LENGTH] = { 0 };
+   size_t _len;
+   char msg[128] = { 0 };
    bool downloading          = false;
    bool installed            = false;
    uint64_t bytes_downloaded = 0;
@@ -283,7 +292,8 @@ void steam_install_core_dlc(steam_core_dlc_t *core_dlc)
 
    if (downloading || installed)
    {
-      runloop_msg_queue_push(msg_hash_to_str(MSG_CORE_STEAM_CURRENTLY_DOWNLOADING), 1, 180, true, NULL,
+      const char *_msg = msg_hash_to_str(MSG_CORE_STEAM_CURRENTLY_DOWNLOADING);
+      runloop_msg_queue_push(_msg, strlen(_msg), 1, 180, true, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
       return;
    }
@@ -296,45 +306,48 @@ void steam_install_core_dlc(steam_core_dlc_t *core_dlc)
 
    return;
 error:
-   snprintf(msg, sizeof(msg), "%s: (%d-%d)",
+   _len = snprintf(msg, sizeof(msg), "%s: (%d-%d)",
          msg_hash_to_str(MSG_ERROR),
          MIST_UNPACK_RESULT(result));
 
-   runloop_msg_queue_push(msg, 1, 180, true, NULL,
+   runloop_msg_queue_push(msg, _len, 1, 180, true, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
 
-   RARCH_ERR("[Steam]: Error installing DLC %d (%d-%d)\n", core_dlc->app_id, MIST_UNPACK_RESULT(result));
+   RARCH_ERR("[Steam] Error installing DLC %d (%d-%d).\n", core_dlc->app_id, MIST_UNPACK_RESULT(result));
 }
 
 void steam_uninstall_core_dlc(steam_core_dlc_t *core_dlc)
 {
-   char msg[PATH_MAX_LENGTH] = { 0 };
-
+   size_t _len;
+   const char *_msg  = NULL;
+   char msg[128]     = { 0 };
    MistResult result = mist_steam_apps_uninstall_dlc(core_dlc->app_id);
 
    if (MIST_IS_ERROR(result))
       goto error;
 
-   runloop_msg_queue_push(msg_hash_to_str(MSG_CORE_STEAM_UNINSTALLED), 1, 180, true, NULL,
+   _msg = msg_hash_to_str(MSG_CORE_STEAM_UNINSTALLED);
+   runloop_msg_queue_push(_msg, strlen(_msg), 1, 180, true, NULL,
       MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
    return;
 
 error:
-   snprintf(msg, sizeof(msg), "%s: (%d-%d)",
+   _len = snprintf(msg, sizeof(msg), "%s: (%d-%d)",
          msg_hash_to_str(MSG_ERROR),
          MIST_UNPACK_RESULT(result));
 
-   runloop_msg_queue_push(msg, 1, 180, true, NULL,
+   runloop_msg_queue_push(msg, _len, 1, 180, true, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
 
-   RARCH_ERR("[Steam]: Error uninstalling DLC %d (%d-%d)\n", core_dlc->app_id, MIST_UNPACK_RESULT(result));
+   RARCH_ERR("[Steam] Error uninstalling DLC %d (%d-%d).\n", core_dlc->app_id, MIST_UNPACK_RESULT(result));
 }
 
 bool steam_open_osk(void)
 {
    bool                     shown = false;
    bool                   on_deck = false;
-   video_driver_state_t *video_st = video_state_get_ptr();
+   unsigned           output_size = VIDEO_DRIVER_OUTPUT_DIMS(
+         video_state_get_ptr());
 
    /* Only open the Steam OSK if running on a Steam Deck,
       as currently the Big Picture OSK seems to be semi-broken */
@@ -346,8 +359,8 @@ bool steam_open_osk(void)
       MistFloatingGamepadTextInputMode_SingleLine,
       0,
       0,
-      video_st->width,
-      video_st->height / 2,
+      VIDEO_SCALE_W(output_size),
+      VIDEO_SCALE_H(output_size) / 2,
       &shown
    );
 
@@ -406,7 +419,7 @@ void steam_update_presence(enum presence presence, bool force)
                      path_get(RARCH_PATH_CONTENT),
                      &entry);
 
-               if (entry && !string_is_empty(entry->label))
+               if (entry && entry->label && *entry->label)
                   label = entry->label;
             }
 
@@ -441,78 +454,47 @@ void steam_update_presence(enum presence presence, bool force)
                   }
                   break;
                case STEAM_RICH_PRESENCE_FORMAT_CONTENT_SYSTEM:
-                  _len               = strlcpy(content, label, sizeof(content));
-                  content[_len  ]    = ' ';
-                  content[_len+1]    = '(';
-                  content[_len+2]    = '\0';
+                  _len = 0;
+                  strlcpy_append(content, sizeof(content), &_len, label);
+                  strlcpy_append(content, sizeof(content), &_len, " (");
                   if (core_info)
                   {
-                     _len            = strlcat(content, core_info->systemname,
-                           sizeof(content));
-                     content[_len  ] = ')';
-                     content[_len+1] = '\0';
+                     strlcpy_append(content, sizeof(content), &_len,
+                           core_info->systemname);
+                     strlcpy_append(content, sizeof(content), &_len, ")");
                   }
                   else
-                  {
-                     content[_len+2] = 'N';
-                     content[_len+3] = '/';
-                     content[_len+4] = 'A';
-                     content[_len+5] = ')';
-                     content[_len+6] = '\0';
-                  }
+                     strlcpy_append(content, sizeof(content), &_len, "N/A)");
                   break;
                case STEAM_RICH_PRESENCE_FORMAT_CONTENT_CORE:
-                  _len               = strlcpy(content, label, sizeof(content));
-                  content[_len  ]    = ' ';
-                  content[_len+1]    = '(';
-                  content[_len+2]    = '\0';
+                  _len = 0;
+                  strlcpy_append(content, sizeof(content), &_len, label);
+                  strlcpy_append(content, sizeof(content), &_len, " (");
                   if (core_info)
                   {
-                     _len            = strlcat(content, core_info->core_name,
-                           sizeof(content));
-                     content[_len  ] = ')';
-                     content[_len+1] = '\0';
+                     strlcpy_append(content, sizeof(content), &_len,
+                           core_info->core_name);
+                     strlcpy_append(content, sizeof(content), &_len, ")");
                   }
                   else
-                  {
-                     content[_len+2] = 'N';
-                     content[_len+3] = '/';
-                     content[_len+4] = 'A';
-                     content[_len+5] = ')';
-                     content[_len+6] = '\0';
-                  }
+                     strlcpy_append(content, sizeof(content), &_len, "N/A)");
                   break;
                case STEAM_RICH_PRESENCE_FORMAT_CONTENT_SYSTEM_CORE:
-                  _len               = strlcpy(content, label, sizeof(content));
-                  content[_len  ]    = ' ';
-                  content[_len+1]    = '(';
-                  content[_len+2]    = '\0';
+                  _len = 0;
+                  strlcpy_append(content, sizeof(content), &_len, label);
+                  strlcpy_append(content, sizeof(content), &_len, " (");
                   if (core_info)
                   {
-                     _len            = strlcat(content, core_info->systemname,
-                           sizeof(content));
-                     content[_len  ] = ' ';
-                     content[_len+1] = '-';
-                     content[_len+2] = ' ';
-                     _len            = strlcat(content, core_info->core_name,
-                           sizeof(content));
-                     content[_len  ] = ')';
-                     content[_len+1] = '\0';
+                     strlcpy_append(content, sizeof(content), &_len,
+                           core_info->systemname);
+                     strlcpy_append(content, sizeof(content), &_len, " - ");
+                     strlcpy_append(content, sizeof(content), &_len,
+                           core_info->core_name);
+                     strlcpy_append(content, sizeof(content), &_len, ")");
                   }
                   else
-                  {
-                     content[_len+2]  = 'N';
-                     content[_len+3]  = '/';
-                     content[_len+4]  = 'A';
-                     content[_len+5]  = ' ';
-                     content[_len+6]  = '-';
-                     content[_len+7]  = ' ';
-                     content[_len+8]  = 'N';
-                     content[_len+9]  = '/';
-                     content[_len+10] = 'A';
-                     content[_len+11] = ')';
-                     content[_len+12] = '\0';
-                  }
+                     strlcpy_append(content, sizeof(content), &_len,
+                           "N/A - N/A)");
                   break;
                case STEAM_RICH_PRESENCE_FORMAT_NONE:
                default:
@@ -541,7 +523,12 @@ void steam_deinit(void)
       steam_core_dlc_list_free(mist_dlc_list);
 
    if (MIST_IS_SUCCESS(result))
+   {
       mist_initialized = false;
+#ifndef HAVE_DISCORD
+      runloop_frame_work_set(RUNLOOP_WORK_PRESENCE, false);
+#endif
+   }
    else
-      RARCH_ERR("[Steam]: Failed to deinitialize mist subprocess (%d-%d)\n", MIST_UNPACK_RESULT(result));
+      RARCH_ERR("[Steam] Failed to deinitialize mist subprocess (%d-%d).\n", MIST_UNPACK_RESULT(result));
 }

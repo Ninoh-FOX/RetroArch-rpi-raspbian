@@ -16,6 +16,8 @@
 
 #include <ctype.h>
 #include <streams/interface_stream.h>
+#include <streams/file_stream.h>
+#include <streams/chd_stream.h>
 
 RETRO_BEGIN_DECLS
 
@@ -32,7 +34,10 @@ int detect_ps2_game(intfstream_t *fd, char *s, size_t len,
       const char *filename);
 int detect_psp_game(intfstream_t *fd, char *s, size_t len,
       const char *filename);
-int detect_gc_game(intfstream_t *fd, char *s, size_t len,
+int detect_pbp_game(intfstream_t *fd, char *s, size_t len,
+      const char *filename);
+int detect_3ds_game(intfstream_t *fd, char *s, size_t len);
+size_t detect_gc_game(intfstream_t *fd, char *s, size_t len,
       const char *filename);
 int detect_scd_game(intfstream_t *fd, char *s, size_t len,
       const char *filename);
@@ -40,18 +45,45 @@ int detect_sat_game(intfstream_t *fd,
       char *s, size_t len, const char *filename);
 int detect_dc_game(intfstream_t *fd, char *s, size_t len,
       const char *filename);
-int detect_wii_game(intfstream_t *fd, char *s, size_t len,
+size_t detect_wii_game(intfstream_t *fd, char *s, size_t len,
       const char *filename);
 int detect_system(intfstream_t *fd, const char **system_name,
       const char * filename);
 int cue_find_track(const char *cue_path, bool first, uint64_t *offset,
-      uint64_t *size, char *track_path, uint64_t max_len);
+      size_t *size, char *s, size_t len);
 bool cue_next_file(intfstream_t *fd, const char *cue_path,
       char *s, uint64_t len);
-int gdi_find_track(const char *gdi_path, bool first, char *track_path,
-      uint64_t max_len);
-bool gdi_next_file(intfstream_t *fd, const char *gdi_path, char *path,
-      uint64_t max_len);
+int gdi_find_track(const char *gdi_path, bool first, char *s,
+      size_t len);
+size_t gdi_next_file(intfstream_t *fd, const char *gdi_path, char *s,
+      size_t len);
+
+int intfstream_get_serial(intfstream_t *fd, char *s, size_t len,
+      const char *filename);
+bool intfstream_file_get_serial(const char *name,
+      uint64_t offset, int64_t size, char *s, size_t len, uint64_t *fsize);
+int task_database_cue_get_serial(const char *name, char *s, size_t len,
+      uint64_t *filesize);
+int task_database_gdi_get_serial(const char *name, char *s, size_t len,
+      uint64_t *filesize);
+int task_database_pbp_get_serial(const char *name, char *s, size_t len,
+      uint64_t *filesize);
+int task_database_3ds_get_serial(const char *name, char *s, size_t len,
+      uint64_t *filesize);
+bool is_chd_file_cdi(const char *path);
+int task_database_chd_get_serial(const char *name, char *serial, size_t len,
+      uint64_t *filesize);
+
+enum task_database_crc_kind
+{
+   TASK_DATABASE_CRC_FILE = 0,
+   TASK_DATABASE_CRC_CUE,
+   TASK_DATABASE_CRC_GDI,
+   TASK_DATABASE_CRC_CHD
+};
+
+intfstream_t *task_database_crc_open(const char *name,
+      enum task_database_crc_kind kind, int64_t *span, uint64_t *size);
 
 RETRO_END_DECLS
 

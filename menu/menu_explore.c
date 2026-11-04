@@ -21,14 +21,20 @@
 #include <array/rbuf.h>
 #include <array/rhmap.h>
 #include <formats/rjson.h>
+#include <formats/rjson_stream.h>
 #include <formats/rjson_helpers.h>
 #include <retro_endianness.h>
+#include <encodings/crc32.h>
+#include <streams/file_stream.h>
+#include <string/stdstring.h>
 
+#include "../gfx/gfx_surface.h"
 #include "menu_driver.h"
 #include "menu_cbs.h"
 #include "../retroarch.h"
 #include "../configuration.h"
 #include "../file_path_special.h"
+#include "../msg_hash_lbl_str.h"
 #include "../playlist.h"
 #include "../verbosity.h"
 #include "../libretro-db/libretrodb.h"
@@ -40,6 +46,7 @@ enum
    EXPLORE_BY_DEVELOPER          = 0,
    EXPLORE_BY_PUBLISHER,
    EXPLORE_BY_RELEASEYEAR,
+   EXPLORE_BY_RELEASEMONTH,
    EXPLORE_BY_PLAYERCOUNT,
    EXPLORE_BY_GENRE,
    EXPLORE_BY_ACHIEVEMENTS,
@@ -114,7 +121,7 @@ struct explore_state
    explore_string_t **by[EXPLORE_CAT_COUNT];
    explore_entry_t *entries;
    playlist_t **playlists;
-   uintptr_t *icons;
+   gfx_surface_t **icons;
    const char *label_explore_item_str;
 
    char title[1024];
@@ -142,6 +149,7 @@ explore_by_info[EXPLORE_CAT_COUNT] =
    { "developer",          MENU_ENUM_LABEL_VALUE_RDB_ENTRY_DEVELOPER,           MENU_ENUM_LABEL_VALUE_EXPLORE_BY_DEVELOPER,          true,  true,  false, false },
    { "publisher",          MENU_ENUM_LABEL_VALUE_RDB_ENTRY_PUBLISHER,           MENU_ENUM_LABEL_VALUE_EXPLORE_BY_PUBLISHER,          true,  true,  false, false },
    { "releaseyear",        MENU_ENUM_LABEL_VALUE_EXPLORE_CATEGORY_RELEASE_YEAR, MENU_ENUM_LABEL_VALUE_EXPLORE_BY_RELEASE_YEAR,       false, false, true,  false },
+   { "releasemonth",       MENU_ENUM_LABEL_VALUE_RDB_ENTRY_RELEASE_MONTH,       MENU_ENUM_LABEL_VALUE_EXPLORE_BY_RELEASE_MONTH,      false, false, true,  false },
    { "users",              MENU_ENUM_LABEL_VALUE_EXPLORE_CATEGORY_PLAYER_COUNT, MENU_ENUM_LABEL_VALUE_EXPLORE_BY_PLAYER_COUNT,       false, false, true,  false },
    { "genre",              MENU_ENUM_LABEL_VALUE_RDB_ENTRY_GENRE,               MENU_ENUM_LABEL_VALUE_EXPLORE_BY_GENRE,              true,  false, false, false },
    { "achievements",       MENU_ENUM_LABEL_VALUE_RDB_ENTRY_ACHIEVEMENTS,        MENU_ENUM_LABEL_VALUE_EXPLORE_BY_ACHIEVEMENTS,       false, false, false, true  },
@@ -183,23 +191,39 @@ static explore_state_t* explore_state;
 
 static void ex_arena_grow(ex_arena *arena, size_t min_size)
 {
-   size_t size = EX_ARENA_ALIGN_UP(
+   size_t _len = EX_ARENA_ALIGN_UP(
          MAX(min_size, EX_ARENA_BLOCK_SIZE), EX_ARENA_ALIGNMENT);
-   arena->ptr  = (char *)malloc(size);
-   arena->end  = arena->ptr + size;
+   char *new_block = (char *)malloc(_len);
+   /* NULL-check: on OOM leave arena->ptr and arena->end
+    * pointing at the current (exhausted) block if there is one,
+    * or both NULL on first grow.  ex_arena_alloc returns the
+    * current arena->ptr as the caller's 'ptr' and the caller
+    * dereferences it, so we need ex_arena_alloc itself to
+    * signal the failure - that's handled by the 'end - ptr'
+    * pointer-subtraction which is defined to be 0 when both
+    * are NULL.  The second check in ex_arena_alloc below
+    * catches the remaining OOM path. */
+   if (!new_block)
+      return;
+   arena->ptr  = new_block;
+   arena->end  = arena->ptr + _len;
    RBUF_PUSH(arena->blocks, arena->ptr);
 }
 
-static void *ex_arena_alloc(ex_arena *arena, size_t size)
+static void *ex_arena_alloc(ex_arena *arena, size_t len)
 {
    void *ptr  = NULL;
-
-   if (size > (size_t)(arena->end - arena->ptr))
-      ex_arena_grow(arena, size);
-
+   if (len > (size_t)(arena->end - arena->ptr))
+      ex_arena_grow(arena, len);
+   /* Re-check after grow: on OOM the grow function leaves
+    * arena->ptr and arena->end unchanged, so the capacity
+    * check still fails.  Return NULL so callers can bail
+    * rather than dereference stale or NULL storage. */
+   if (len > (size_t)(arena->end - arena->ptr))
+      return NULL;
    ptr        = arena->ptr;
    arena->ptr = (char *)
-      EX_ARENA_ALIGN_UP((uintptr_t)(arena->ptr + size), EX_ARENA_ALIGNMENT);
+      EX_ARENA_ALIGN_UP((uintptr_t)(arena->ptr + len), EX_ARENA_ALIGNMENT);
    return ptr;
 }
 
@@ -218,17 +242,17 @@ static void ex_arena_free(ex_arena *arena)
 
 /* Hash function */
 static uint32_t ex_hash32_nocase_filtered(
-      const unsigned char* str, size_t len,
+      const unsigned char *s, size_t len,
       unsigned char f_first, unsigned char f_last)
 {
    const unsigned char *end = NULL;
    uint32_t hash            = (uint32_t)0x811c9dc5;
-   for (end = str + len; str != end;)
+   for (end = s + len; s != end;)
    {
-      unsigned char c = *(str++);
+      unsigned char c = *(s++);
       if (c >= f_first && c <= f_last)
-         hash = ((hash * (uint32_t)0x01000193) 
-               ^ (uint32_t)((c >= 'A' && c <= 'Z') 
+         hash = ((hash * (uint32_t)0x01000193)
+               ^ (uint32_t)((c >= 'A' && c <= 'Z')
                   ? (c | 0x20) : c));
    }
    if (hash)
@@ -316,7 +340,7 @@ static void explore_add_unique_string(
 
    for (p = str + 1;; p++)
    {
-      size_t len              = 0;
+      size_t _len             = 0;
       uint32_t hash           = 0;
       explore_string_t* entry = NULL;
 
@@ -346,18 +370,26 @@ static void explore_add_unique_string(
             p--;
       }
 
-      len                     = p - str;
+      _len                    = p - str;
       hash                    = ex_hash32_nocase_filtered(
-            (unsigned char*)str, len, '0', 255);
+            (unsigned char*)str, _len, '0', 255);
       entry                   = RHMAP_GET(maps[cat], hash);
 
       if (!entry)
       {
          entry                = (explore_string_t*)
             ex_arena_alloc(&state->arena,
-                  sizeof(explore_string_t) + len);
-         memcpy(entry->str, str, len);
-         entry->str[len]      = '\0';
+                  sizeof(explore_string_t) + _len);
+         /* NULL-check: ex_arena_alloc returns NULL on OOM now.
+          * On failure skip this entry - the surrounding loop
+          * iterates over chars in the input string splitting on
+          * separators, so one missed entry just means one
+          * category value doesn't get indexed this pass.  Picked
+          * up on the next scan once memory is available. */
+         if (!entry)
+            continue;
+         memcpy(entry->str, str, _len);
+         entry->str[_len]      = '\0';
          RBUF_PUSH(state->by[cat], entry);
          RHMAP_SET(maps[cat], hash, entry);
       }
@@ -393,14 +425,17 @@ static void explore_unload_icons(explore_state_t *state)
    if (!state)
       return;
    for (i = 0; i != RBUF_LEN(state->icons); i++)
-      if (state->icons[i])
-         video_driver_texture_unload(&state->icons[i]);
+   {
+      gfx_surface_free(state->icons[i]);
+      state->icons[i] = NULL;
+   }
 }
 
 static void explore_load_icons(explore_state_t *state)
 {
    char path[PATH_MAX_LENGTH];
-   size_t i, pathlen, system_count;
+   size_t i, _len, system_count;
+   bool supports_rgba = gfx_surface_wants_rgba();
    if (!state)
       return;
 
@@ -410,132 +445,119 @@ static void explore_load_icons(explore_state_t *state)
    /* unload any icons that could exist from a previous call to this */
    explore_unload_icons(state);
 
-   /* RBUF_RESIZE leaves memory uninitialised, 
+   /* RBUF_RESIZE leaves memory uninitialised,
       have to zero it 'manually' */
    RBUF_RESIZE(state->icons, system_count);
    memset(state->icons, 0, RBUF_SIZEOF(state->icons));
 
    fill_pathname_application_special(path, sizeof(path),
          APPLICATION_SPECIAL_DIRECTORY_ASSETS_SYSICONS);
-   if (string_is_empty(path))
+   if (!*path)
       return;
 
-   fill_pathname_slash(path, sizeof(path));
-   pathlen = strlen(path);
+   _len = fill_pathname_slash(path, sizeof(path));
 
    for (i = 0; i != system_count; i++)
    {
-      struct texture_image ti;
-      size_t _len = pathlen;
-      _len       += strlcpy(path       + pathlen,
+      size_t __len = _len;
+      __len       += strlcpy(path + _len,
                  state->by[EXPLORE_BY_SYSTEM][i]->str,
-                 sizeof(path) - pathlen);
-      strlcpy(path + _len, ".png", sizeof(path) - _len);
+                 sizeof(path)     - _len);
+      strlcpy_lit(path + __len, ".png", sizeof(path) - __len);
       if (!path_is_valid(path))
          continue;
 
-      ti.width         = 0;
-      ti.height        = 0;
-      ti.pixels        = NULL;
-      ti.supports_rgba = video_driver_supports_rgba();
-
-      if (!image_texture_load(&ti, path))
-         continue;
-
-      if (ti.pixels)
-         video_driver_texture_load(&ti,
-               TEXTURE_FILTER_MIPMAP_LINEAR, &state->icons[i]);
-
-      image_texture_free(&ti);
+      if (!state->icons[i])
+         state->icons[i] = gfx_surface_new_still(gfx_display_texture_filter());
+      gfx_surface_submit_path(state->icons[i], path, supports_rgba);
    }
 }
 
-explore_state_t *menu_explore_build_list(const char *directory_playlist,
-      const char *directory_database)
+/* ---- the explore index, built in resumable steps ----
+ *
+ * Three phases, each advanced by menu_explore_build_step() until the
+ * budget callback says stop: the playlists are read (the playlist
+ * parser's own resumable form) and their entries indexed by RDB; each
+ * RDB is walked, one cursor item at a time; the categories and the
+ * entries are sorted, one per step.  menu_explore_build_list() is
+ * begin + one unbudgeted step + end, so the blocking and the sliced
+ * builds cannot drift apart. */
+
+struct explore_source
 {
-   unsigned i;
+   const struct playlist_entry *source;
+   uint32_t entry_index, meta_count;
+};
+
+struct explore_rdb
+{
+   libretrodb_t *handle;
+   struct explore_source *playlist_crcs;
+   struct explore_source *playlist_names;
+   size_t count;
+   char systemname[NAME_MAX_LENGTH];
+};
+
+enum explore_build_phase
+{
+   EXPLORE_BUILD_PLAYLISTS = 0,
+   EXPLORE_BUILD_RDBS,
+   EXPLORE_BUILD_SORT,
+   EXPLORE_BUILD_DONE
+};
+
+struct explore_build
+{
+   explore_state_t *state;
+   struct explore_rdb *rdbs;                       /* RBUF  */
+   int *rdb_indices;                               /* RHMAP */
+   explore_string_t **cat_maps[EXPLORE_CAT_COUNT]; /* RHMAP */
+   explore_string_t **split_buf;                   /* RBUF  */
+   libretro_vfs_implementation_dir *dir;
+   playlist_parse_t *parse;     /* the playlist being read     */
+   playlist_t *playlist;        /* the playlist being indexed  */
+   libretrodb_cursor_t *cur;    /* the RDB being walked        */
+   char *directory_playlist;
+   char *directory_database;
+   size_t entry_pos;            /* next entry of the playlist  */
+   size_t used_entries;
+   size_t rdb_pos;              /* next RDB to walk            */
+   unsigned sort_pos;           /* next category to sort       */
+   uint32_t fhash;
+   enum explore_build_phase phase;
+   char fname[NAME_MAX_LENGTH]; /* the playlist file's name    */
    char tmp[PATH_MAX_LENGTH];
-   struct explore_source
+};
+
+static bool explore_build_within(bool (*within)(void*), void *ud)
+{
+   return !within || within(ud);
+}
+
+/* One playlist entry into the RDB index. */
+static void explore_build_index_entry(struct explore_build *b,
+      const struct playlist_entry *entry)
+{
+   const char *directory_database = b->directory_database;
+   const char *fname              = b->fname;
+   const char *fext               = strrchr(fname, '.');
+   uint32_t fhash                 = b->fhash;
+   char *tmp                      = b->tmp;
+   size_t used_entries            = 0;
+   struct explore_rdb *rdbs       = b->rdbs;
+   int *rdb_indices               = b->rdb_indices;
    {
-      const struct playlist_entry *source;
-      uint32_t entry_index, meta_count;
-   };
-   struct explore_rdb
-   {
-      libretrodb_t *handle;
-      struct explore_source *playlist_crcs;
-      struct explore_source *playlist_names;
-      size_t count;
-      char systemname[256];
-   }
-   *rdbs                                          = NULL;
-   int *rdb_indices                               = NULL;
-   explore_string_t **cat_maps[EXPLORE_CAT_COUNT] = {NULL};
-   explore_string_t **split_buf                   = NULL;
-   libretro_vfs_implementation_dir *dir           = NULL;
-
-   explore_state_t *state = (explore_state_t*)calloc(1, sizeof(*state));
-
-   if (!state)
-      return NULL;
-
-   state->label_explore_item_str    = 
-      msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_ITEM);
-
-   /* Index all playlists */
-   for (dir = retro_vfs_opendir_impl(directory_playlist, false); dir;)
-   {
-      playlist_config_t playlist_config;
-      size_t j, used_entries                    = 0;
-      playlist_t *playlist                      = NULL;
-      const char *fext                          = NULL;
-      const char *fname                         = NULL;
-      uint32_t fhash                            = 0;
-
-      playlist_config.path[0]                   = '\0';
-      playlist_config.base_content_directory[0] = '\0';
-      playlist_config.capacity                  = 0;
-      playlist_config.old_format                = false;
-      playlist_config.compress                  = false;
-      playlist_config.fuzzy_archive_match       = false;
-      playlist_config.autofix_paths             = false;
-
-      if (!retro_vfs_readdir_impl(dir))
-      {
-         retro_vfs_closedir_impl(dir);
-         break;
-      }
-
-      fname                                     = retro_vfs_dirent_get_name_impl(dir);
-      if (fname)
-         fext                           = strrchr(fname, '.');
-
-      if (!fext || strcasecmp(fext, ".lpl"))
-         continue;
-
-      fill_pathname_join_special(playlist_config.path,
-            directory_playlist, fname, sizeof(playlist_config.path));
-      playlist_config.capacity          = COLLECTION_SIZE;
-      playlist                          = playlist_init(&playlist_config);
-
-      fhash = ex_hash32_nocase_filtered(
-            (unsigned char*)fname, fext - fname, '0', 255);
-
-      for (j = 0; j < playlist_size(playlist); j++)
-      {
          int rdb_num;
          uint32_t entry_crc32;
          struct explore_source src = { NULL, (uint32_t)-1, 0 };
          struct explore_rdb* rdb             = NULL;
-         const struct playlist_entry *entry  = NULL;
          const char *db_name                 = fname;
          const char *db_ext                  = fext;
          uint32_t rdb_hash                   = fhash;
-         playlist_get_index(playlist, j, &entry);
 
          /* We also could build label from file name, for now it's required */
          if (!entry->label || !*entry->label)
-            continue;
+            goto end;
 
          /* For auto scanned playlists the entry db_name matches the
           * lpl file name and we can just use that */
@@ -543,7 +565,7 @@ explore_state_t *menu_explore_build_list(const char *directory_playlist,
                && strcasecmp(entry->db_name, fname))
          {
             db_name = entry->db_name;
-            db_ext = strrchr(db_name, '.');
+            db_ext  = strrchr(db_name, '.');
             if (!db_ext)
                db_ext = db_name + strlen(db_name);
             rdb_hash = ex_hash32_nocase_filtered(
@@ -553,26 +575,26 @@ explore_state_t *menu_explore_build_list(const char *directory_playlist,
          rdb_num = RHMAP_GET(rdb_indices, rdb_hash);
          if (!rdb_num)
          {
-            size_t systemname_len;
+            size_t _len;
             struct explore_rdb newrdb;
-            char *ext_path        = NULL;
+            char *ext_path          = NULL;
 
-            newrdb.handle         = libretrodb_new();
-            newrdb.count          = 0;
-            newrdb.playlist_crcs  = NULL;
-            newrdb.playlist_names = NULL;
+            newrdb.handle           = libretrodb_new();
+            newrdb.count            = 0;
+            newrdb.playlist_crcs    = NULL;
+            newrdb.playlist_names   = NULL;
 
-            systemname_len        = db_ext - db_name;
-            if (systemname_len >= sizeof(newrdb.systemname))
-               systemname_len     = sizeof(newrdb.systemname)-1;
-            memcpy(newrdb.systemname, db_name, systemname_len);
-            newrdb.systemname[systemname_len] = '\0';
+            _len                    = db_ext - db_name;
+            if (_len >= sizeof(newrdb.systemname))
+               _len                 = sizeof(newrdb.systemname)-1;
+            memcpy(newrdb.systemname, db_name, _len);
+            newrdb.systemname[_len] = '\0';
 
             fill_pathname_join_special(
-                  tmp, directory_database, db_name, sizeof(tmp));
+                  tmp, directory_database, db_name, sizeof(b->tmp));
 
             /* Replace the extension - change 'lpl' to 'rdb' */
-            if ((    ext_path = path_get_extension_mutable(tmp)) 
+            if ((    ext_path = path_get_extension_mutable(tmp))
                   && ext_path[0] == '.'
                   && ext_path[1] == 'l'
                   && ext_path[2] == 'p'
@@ -588,7 +610,7 @@ explore_state_t *menu_explore_build_list(const char *directory_playlist,
                /* Invalid RDB file */
                libretrodb_free(newrdb.handle);
                RHMAP_SET(rdb_indices, rdb_hash, -1);
-               continue;
+               goto end;
             }
 
             RBUF_PUSH(rdbs, newrdb);
@@ -597,45 +619,41 @@ explore_state_t *menu_explore_build_list(const char *directory_playlist,
          }
 
          if ((uintptr_t)rdb_num == (uintptr_t)-1)
-            continue;
+            goto end;
 
          rdb = &rdbs[rdb_num - 1];
-         rdb->count++;
-         entry_crc32 = (uint32_t)strtoul(
-               (entry->crc32 ? entry->crc32 : ""), NULL, 16);
-         src.source = entry;
-         if (entry_crc32)
+         if (rdb)
          {
-            RHMAP_SET(rdb->playlist_crcs, entry_crc32, src);
-         }
-         else
-         {
-            RHMAP_SET_STR(rdb->playlist_names, entry->label, src);
+            rdb->count++;
+            entry_crc32 = (uint32_t)strtoul(
+                  (entry->crc32 ? entry->crc32 : ""), NULL, 16);
+            src.source = entry;
+            if (entry_crc32)
+            {
+               RHMAP_SET(rdb->playlist_crcs, entry_crc32, src);
+            }
+            else
+            {
+               RHMAP_SET_STR(rdb->playlist_names, entry->label, src);
+            }
          }
          used_entries++;
-      }
-
-      if (used_entries)
-         RBUF_PUSH(state->playlists, playlist);
-      else
-         playlist_free(playlist);
    }
+end:
+   b->rdbs        = rdbs;
+   b->rdb_indices = rdb_indices;
+   b->used_entries += used_entries;
+}
 
-   /* Loop through all RDBs referenced in the playlists 
-    * and load meta data strings */
-   for (i = 0; i != RBUF_LEN(rdbs); i++)
+/* One RDB cursor item into the entries. */
+static void explore_build_take_item(struct explore_build *b,
+      struct explore_rdb *rdb, struct rmsgpack_dom_value *itemp)
+{
+   explore_state_t *state             = b->state;
+   explore_string_t ***cat_maps       = b->cat_maps;
+   explore_string_t **split_buf       = b->split_buf;
+   struct rmsgpack_dom_value item     = *itemp;
    {
-      struct rmsgpack_dom_value item;
-      struct explore_rdb* rdb  = &rdbs[i];
-      libretrodb_cursor_t *cur = libretrodb_cursor_new();
-      bool more                = 
-         (
-          libretrodb_cursor_open(rdb->handle, cur, NULL) == 0
-          && libretrodb_cursor_read_item(cur, &item) == 0);
-
-      for (; more; more = (rmsgpack_dom_value_free(&item),
-               libretrodb_cursor_read_item(cur, &item) == 0))
-      {
          unsigned k, l, cat;
          explore_entry_t* e;
          const char *fields[EXPLORE_CAT_COUNT];
@@ -649,7 +667,7 @@ explore_state_t *menu_explore_build_list(const char *directory_playlist,
          struct explore_source* src         = NULL;
 
          if (item.type != RDT_MAP)
-            continue;
+            goto end;
 
          for (k = 0; k < EXPLORE_CAT_COUNT; k++)
             fields[k]                       = NULL;
@@ -663,7 +681,7 @@ explore_state_t *menu_explore_build_list(const char *directory_playlist,
                continue;
 
             key_str                         = key->val.string.buff;
-            if (string_is_equal(key_str, "crc"))
+            if (!strcmp(key_str, "crc"))
             {
                switch (val->val.binary.len)
                {
@@ -683,13 +701,13 @@ explore_state_t *menu_explore_build_list(const char *directory_playlist,
 
                continue;
             }
-            else if (string_is_equal(key_str, "name"))
+            else if (!strcmp(key_str, "name"))
             {
                name = val->val.string.buff;
                continue;
             }
 #ifdef EXPLORE_SHOW_ORIGINAL_TITLE
-            else if (string_is_equal(key_str, "original_title"))
+            else if (!strcmp(key_str, "original_title"))
             {
                original_title = val->val.string.buff;
                continue;
@@ -698,7 +716,7 @@ explore_state_t *menu_explore_build_list(const char *directory_playlist,
 
             for (cat = 0; cat != EXPLORE_CAT_COUNT; cat++)
             {
-               if (!string_is_equal(key_str, explore_by_info[cat].rdbkey))
+               if (strcmp(key_str, explore_by_info[cat].rdbkey) != 0)
                   continue;
 
                meta_count++;
@@ -738,9 +756,9 @@ explore_state_t *menu_explore_build_list(const char *directory_playlist,
             src = (idx != -1 ? &rdb->playlist_names[idx] : NULL);
          }
          if (!src)
-            continue;
+            goto end;
          if (src->entry_index != (uint32_t)-1 && src->meta_count >= meta_count)
-            continue;
+            goto end;
 
          if (src->entry_index == (uint32_t)-1)
          {
@@ -769,84 +787,395 @@ explore_state_t *menu_explore_build_list(const char *directory_playlist,
 #ifdef EXPLORE_SHOW_ORIGINAL_TITLE
          if (original_title && *original_title)
          {
-            size_t len        = strlen(original_title) + 1;
+            size_t _len       = strlen(original_title) + 1;
             e->original_title = (char*)
-               ex_arena_alloc(&state->arena, len);
-            memcpy(e->original_title, original_title, len);
+               ex_arena_alloc(&state->arena, _len);
+            /* NULL-check: arena alloc returns NULL on OOM.  Skip
+             * the memcpy; e->original_title stays NULL (matches
+             * the 'e->original_title = NULL' initialisation a
+             * few lines above).  Callers under
+             * EXPLORE_SHOW_ORIGINAL_TITLE are expected to gate
+             * reads of this field. */
+            if (e->original_title)
+               memcpy(e->original_title, original_title, _len);
          }
 #endif
 
          if (RBUF_LEN(split_buf))
          {
-            size_t len;
+            size_t _len;
 
             RBUF_PUSH(split_buf, NULL); /* terminator */
-            len        = RBUF_SIZEOF(split_buf);
+            _len       = RBUF_SIZEOF(split_buf);
             e->split   = (explore_string_t **)
-               ex_arena_alloc(&state->arena, len);
-            memcpy(e->split, split_buf, len);
+               ex_arena_alloc(&state->arena, _len);
+            /* NULL-check: arena alloc returns NULL on OOM.  Skip
+             * the memcpy; e->split stays NULL.  Downstream
+             * iteration in the Explore menu checks 'e->split'
+             * before walking the pointer array. */
+            if (e->split)
+               memcpy(e->split, split_buf, _len);
             RBUF_CLEAR(split_buf);
          }
 
-         /* if all entries have found connections, we can leave early */
-         if (--rdb->count == 0)
+   }
+end:
+   b->split_buf = split_buf;
+}
+
+/* The playlist phase: one step reads dir entries, parses a playlist
+ * under the budget, indexes its entries under the budget. */
+static int explore_build_step_playlists(struct explore_build *b,
+      bool (*within)(void*), void *ud)
+{
+   for (;;)
+   {
+      if (b->parse)
+      {
+         int r = playlist_parse_step(b->parse, within, ud);
+         if (r == 0)
+            return 0;
+         b->playlist     = (r > 0) ? playlist_parse_end(b->parse) : NULL;
+         if (r < 0)
+            playlist_parse_abort(b->parse);
+         b->parse        = NULL;
+         b->entry_pos    = 0;
+         b->used_entries = 0;
+         if (!b->playlist)
+            continue;
+      }
+      if (b->playlist)
+      {
+         size_t n = playlist_size(b->playlist);
+         while (b->entry_pos < n)
          {
-            rmsgpack_dom_value_free(&item);
-            break;
+            const struct playlist_entry *entry = NULL;
+            if (!explore_build_within(within, ud))
+               return 0;
+            playlist_get_index(b->playlist, b->entry_pos++, &entry);
+            explore_build_index_entry(b, entry);
+         }
+         if (b->used_entries)
+            RBUF_PUSH(b->state->playlists, b->playlist);
+         else
+            playlist_free(b->playlist);
+         b->playlist = NULL;
+      }
+      if (!explore_build_within(within, ud))
+         return 0;
+      /* The next playlist file */
+      for (;;)
+      {
+         const char *fname = NULL;
+         const char *fext  = NULL;
+         playlist_config_t playlist_config;
+
+         if (!b->dir || !retro_vfs_readdir_impl(b->dir))
+         {
+            if (b->dir)
+               retro_vfs_closedir_impl(b->dir);
+            b->dir   = NULL;
+            b->phase = EXPLORE_BUILD_RDBS;
+            return 0;
+         }
+         fname = retro_vfs_dirent_get_name_impl(b->dir);
+         if (fname)
+            fext = strrchr(fname, '.');
+         if (!fext || strcasecmp(fext, ".lpl"))
+            continue;
+
+         playlist_config.path[0]                   = '\0';
+         playlist_config.base_content_directory[0] = '\0';
+         playlist_config.capacity                  = COLLECTION_SIZE;
+         playlist_config.old_format                = false;
+         playlist_config.compress                  = false;
+         playlist_config.fuzzy_archive_match       = false;
+         playlist_config.autofix_paths             = false;
+         fill_pathname_join_special(playlist_config.path,
+               b->directory_playlist, fname, sizeof(playlist_config.path));
+         strlcpy(b->fname, fname, sizeof(b->fname));
+         b->fhash = ex_hash32_nocase_filtered(
+               (unsigned char*)fname, fext - fname, '0', 255);
+         b->parse = playlist_parse_begin(&playlist_config);
+         if (!b->parse)
+            return -1;
+         break;
+      }
+   }
+}
+
+/* The RDB phase: one step walks cursor items under the budget. */
+static int explore_build_step_rdbs(struct explore_build *b,
+      bool (*within)(void*), void *ud)
+{
+   for (;;)
+   {
+      struct explore_rdb *rdb;
+      if (b->rdb_pos == RBUF_LEN(b->rdbs))
+      {
+         b->phase = EXPLORE_BUILD_SORT;
+         return 0;
+      }
+      rdb = &b->rdbs[b->rdb_pos];
+      if (!b->cur)
+      {
+         b->cur = libretrodb_cursor_new();
+         if (!b->cur || libretrodb_cursor_open(rdb->handle, b->cur, NULL) != 0)
+         {
+            if (b->cur)
+               libretrodb_cursor_free(b->cur);
+            b->cur = NULL;
+            goto next_rdb;
          }
       }
-
-      libretrodb_cursor_close(cur);
-      libretrodb_cursor_free(cur);
+      for (;;)
+      {
+         struct rmsgpack_dom_value item;
+         if (!explore_build_within(within, ud))
+            return 0;
+         if (libretrodb_cursor_read_item(b->cur, &item) != 0)
+            break;
+         explore_build_take_item(b, rdb, &item);
+         rmsgpack_dom_value_free(&item);
+      }
+      libretrodb_cursor_close(b->cur);
+      libretrodb_cursor_free(b->cur);
+      b->cur = NULL;
+next_rdb:
       libretrodb_close(rdb->handle);
       libretrodb_free(rdb->handle);
+      rdb->handle = NULL;
+      RHMAP_FREE(rdb->playlist_crcs);
+      RHMAP_FREE(rdb->playlist_names);
+      b->rdb_pos++;
+   }
+}
+
+/* The sort phase: one category, or the entries, per step. */
+static int explore_build_step_sort(struct explore_build *b,
+      bool (*within)(void*), void *ud)
+{
+   explore_state_t *state = b->state;
+   while (b->sort_pos <= EXPLORE_CAT_COUNT)
+   {
+      unsigned i = b->sort_pos;
+      if (!explore_build_within(within, ud))
+         return 0;
+      if (i < EXPLORE_CAT_COUNT)
+      {
+         uint32_t idx;
+         size_t _len = RBUF_LEN(state->by[i]);
+
+         if (state->by[i])
+            qsort(state->by[i], _len, sizeof(*state->by[i]),
+                  (explore_by_info[i].is_numeric ?
+                     explore_qsort_func_nums : explore_qsort_func_strings));
+
+         for (idx = 0; idx != _len; idx++)
+            state->by[i][idx]->idx = idx;
+
+         RHMAP_FREE(b->cat_maps[i]);
+      }
+      /* NULL is not a valid value as a first argument for qsort */
+      else if (state->entries)
+         qsort(state->entries,
+            RBUF_LEN(state->entries),
+            sizeof(*state->entries), explore_qsort_func_entries);
+      b->sort_pos++;
+   }
+   b->phase = EXPLORE_BUILD_DONE;
+   return 1;
+}
+
+explore_build_t *menu_explore_build_begin(const char *directory_playlist,
+      const char *directory_database)
+{
+   struct explore_build *b = (struct explore_build*)calloc(1, sizeof(*b));
+   if (!b)
+      return NULL;
+   b->state = (explore_state_t*)calloc(1, sizeof(*b->state));
+   b->directory_playlist = strdup(directory_playlist);
+   b->directory_database = strdup(directory_database);
+   if (!b->state || !b->directory_playlist || !b->directory_database)
+   {
+      menu_explore_build_abort(b);
+      return NULL;
+   }
+   b->state->label_explore_item_str = MENU_ENUM_LABEL_EXPLORE_ITEM_STR;
+   b->dir   = retro_vfs_opendir_impl(directory_playlist, false);
+   b->phase = EXPLORE_BUILD_PLAYLISTS;
+   return b;
+}
+
+int menu_explore_build_step(explore_build_t *b,
+      bool (*within)(void*), void *ud)
+{
+   for (;;)
+   {
+      int r;
+      switch (b->phase)
+      {
+         case EXPLORE_BUILD_PLAYLISTS:
+            r = explore_build_step_playlists(b, within, ud);
+            break;
+         case EXPLORE_BUILD_RDBS:
+            r = explore_build_step_rdbs(b, within, ud);
+            break;
+         case EXPLORE_BUILD_SORT:
+            r = explore_build_step_sort(b, within, ud);
+            break;
+         case EXPLORE_BUILD_DONE:
+         default:
+            return 1;
+      }
+      if (r != 0)
+         return r;
+      /* A phase ended: go on into the next while the budget allows,
+       * otherwise the next step resumes there. */
+      if (b->phase == EXPLORE_BUILD_DONE)
+         return 1;
+      if (!explore_build_within(within, ud))
+         return 0;
+   }
+}
+
+/* Releases what a build holds between steps; the state itself is
+ * kept for end() or freed by abort(). */
+static void explore_build_release(struct explore_build *b)
+{
+   unsigned i;
+   if (b->parse)
+      playlist_parse_abort(b->parse);
+   if (b->playlist)
+      playlist_free(b->playlist);
+   if (b->cur)
+   {
+      libretrodb_cursor_close(b->cur);
+      libretrodb_cursor_free(b->cur);
+   }
+   if (b->dir)
+      retro_vfs_closedir_impl(b->dir);
+   for (i = 0; i != RBUF_LEN(b->rdbs); i++)
+   {
+      struct explore_rdb *rdb = &b->rdbs[i];
+      if (rdb->handle)
+      {
+         libretrodb_close(rdb->handle);
+         libretrodb_free(rdb->handle);
+      }
       RHMAP_FREE(rdb->playlist_crcs);
       RHMAP_FREE(rdb->playlist_names);
    }
-   RBUF_FREE(split_buf);
-   RHMAP_FREE(rdb_indices);
-   RBUF_FREE(rdbs);
-
+   RBUF_FREE(b->rdbs);
+   RHMAP_FREE(b->rdb_indices);
+   RBUF_FREE(b->split_buf);
    for (i = 0; i != EXPLORE_CAT_COUNT; i++)
+      RHMAP_FREE(b->cat_maps[i]);
+   free(b->directory_playlist);
+   free(b->directory_database);
+}
+
+explore_state_t *menu_explore_build_end(explore_build_t *b)
+{
+   explore_state_t *state = b->state;
+   if (b->phase != EXPLORE_BUILD_DONE)
    {
-      uint32_t idx;
-      size_t len = RBUF_LEN(state->by[i]);
-
-      if (state->by[i])
-         qsort(state->by[i], len, sizeof(*state->by[i]),
-               (explore_by_info[i].is_numeric ?
-                  explore_qsort_func_nums : explore_qsort_func_strings));
-
-      for (idx = 0; idx != len; idx++)
-         state->by[i][idx]->idx = idx;
-
-      RHMAP_FREE(cat_maps[i]);
+      menu_explore_build_abort(b);
+      return NULL;
    }
-   /* NULL is not a valid value as a first argument for qsort */
-   if (state->entries)
-      qsort(state->entries,
-         RBUF_LEN(state->entries),
-         sizeof(*state->entries), explore_qsort_func_entries);
+   b->state = NULL;
+   explore_build_release(b);
+   free(b);
    return state;
+}
+
+void menu_explore_build_abort(explore_build_t *b)
+{
+   if (!b)
+      return;
+   explore_build_release(b);
+   if (b->state)
+   {
+      menu_explore_free_state(b->state);
+      free(b->state);
+   }
+   free(b);
+}
+
+/* The index's identity: every entry in order with its label and each
+ * of its category strings, then every category's strings in order.
+ * Two builds of the same collection - in one go or in steps - hash
+ * the same.  NULL hashes the installed index. */
+uint32_t menu_explore_state_hash(const explore_state_t *state)
+{
+   uint32_t h = 0;
+   size_t i;
+   unsigned c;
+   if (!state)
+      state = explore_state;   /* the installed index */
+   if (!state)
+      return 0;
+   for (i = 0; i != RBUF_LEN(state->entries); i++)
+   {
+      const explore_entry_t *e = &state->entries[i];
+      const char *label        = e->playlist_entry->label;
+      h = encoding_crc32(h, (const uint8_t*)label, strlen(label));
+      for (c = 0; c != EXPLORE_CAT_COUNT; c++)
+      {
+         const char *str = e->by[c] ? e->by[c]->str : "";
+         h = encoding_crc32(h, (const uint8_t*)str, strlen(str) + 1);
+      }
+      if (e->split)
+      {
+         explore_string_t **sp;
+         for (sp = e->split; *sp; sp++)
+            h = encoding_crc32(h, (const uint8_t*)(*sp)->str, strlen((*sp)->str) + 1);
+      }
+   }
+   for (c = 0; c != EXPLORE_CAT_COUNT; c++)
+      for (i = 0; i != RBUF_LEN(state->by[c]); i++)
+      {
+         const explore_string_t *str = state->by[c][i];
+         h = encoding_crc32(h, (const uint8_t*)str->str, strlen(str->str) + 1);
+         h = encoding_crc32(h, (const uint8_t*)&str->idx, sizeof(str->idx));
+      }
+   return h;
+}
+
+size_t menu_explore_state_entry_count(const explore_state_t *state)
+{
+   if (!state)
+      state = explore_state;   /* the installed index */
+   return state ? RBUF_LEN(state->entries) : 0;
+}
+
+explore_state_t *menu_explore_build_list(const char *directory_playlist,
+      const char *directory_database)
+{
+   explore_build_t *b = menu_explore_build_begin(directory_playlist,
+         directory_database);
+   if (!b)
+      return NULL;
+   while (menu_explore_build_step(b, NULL, NULL) == 0) { }
+   return menu_explore_build_end(b);
 }
 
 static int explore_action_get_title(
       const char *path, const char *label,
       unsigned menu_type, char *s, size_t len)
 {
-   strlcpy(s, (explore_state ? explore_state->title : 
+   strlcpy(s, (explore_state ? explore_state->title :
       msg_hash_to_str(MENU_ENUM_LABEL_VALUE_EXPLORE_TAB)), len);
    return 0;
 }
 
-static void explore_append_title(explore_state_t *state,
+static void explore_append_title(char *s, size_t len,
       const char* fmt, ...)
 {
    va_list ap;
-   size_t len = strlen(state->title);
+   size_t _len = strlen(s);
    va_start(ap, fmt);
-   vsnprintf(state->title + len,
-         sizeof(state->title) - len, fmt, ap);
+   vsnprintf(s + _len, len - _len, fmt, ap);
    va_end(ap);
 }
 
@@ -862,7 +1191,7 @@ static int explore_action_sublabel_spacer(
     * > In RGUI it does nothing other than
     *   unnecessarily blank out the fallback
     *   core title text in the sublabel area */
-   if (string_is_equal(menu_driver, "ozone"))
+   if (!strcmp(menu_driver, "ozone"))
    {
       s[0] = ' ';
       s[1] = '\0';
@@ -874,7 +1203,7 @@ static int explore_action_sublabel_spacer(
 static int explore_action_ok(const char *path, const char *label,
       unsigned type, size_t idx, size_t entry_idx)
 {
-   const char* explore_tab = msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_TAB);
+   const char *explore_tab = MENU_ENUM_LABEL_EXPLORE_TAB_STR;
    if (type >= EXPLORE_TYPE_FIRSTITEM || type == EXPLORE_TYPE_FILTERNULL)
    {
       struct menu_state   *menu_st  = menu_state_get_ptr();
@@ -895,7 +1224,7 @@ static int explore_action_ok(const char *path, const char *label,
             state->view_op[lvl] = EXPLORE_OP_EQUAL;
             state->view_use_split[lvl] = explore_by_info[cat].use_split;
             state->view_cats[lvl] = cat;
-            state->view_match[lvl] = (type == EXPLORE_TYPE_FILTERNULL ? 
+            state->view_match[lvl] = (type == EXPLORE_TYPE_FILTERNULL ?
                   NULL : state->by[cat][type-EXPLORE_TYPE_FIRSTITEM]);
             state->view_levels++;
          }
@@ -975,20 +1304,22 @@ static void explore_action_find_complete(void *userdata, const char *line)
    }
 }
 
-static int explore_action_ok_find(const char *path, const char *label, unsigned type, size_t idx, size_t entry_idx)
+static int explore_action_ok_find(const char *path, const char *label,
+      unsigned type, size_t idx, size_t entry_idx)
 {
-   menu_input_ctx_line_t line;
+   menu_input_ctx_line_t line = {0};
    line.label                 = msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SEARCH);
    line.label_setting         = NULL;
    line.type                  = 0;
    line.idx                   = 0;
+   line.text_type             = MENU_INPUT_DIALOG_KB_TYPE_TEXT;
    line.cb                    = explore_action_find_complete;
    menu_input_dialog_start(&line);
    return 0;
 }
 
-static const char* explore_get_view_path(struct menu_state *menu_st, menu_list_t *menu_list,
-      file_list_t *menu_stack)
+static const char* explore_get_view_path(struct menu_state *menu_st,
+      menu_list_t *menu_list, file_list_t *menu_stack)
 {
    struct item_file *cur = (struct item_file *)&menu_stack->list[menu_stack->size - 1];
 
@@ -998,14 +1329,17 @@ static const char* explore_get_view_path(struct menu_state *menu_st, menu_list_t
       const menu_ctx_driver_t *driver_ctx = menu_st->driver_ctx;
       if (driver_ctx->list_get_entry)
       {
-         size_t selection                 = driver_ctx->list_get_selection ? driver_ctx->list_get_selection(menu_st->userdata) : 0;
-         size_t size                      = driver_ctx->list_get_size      ? driver_ctx->list_get_size(menu_st->userdata, MENU_LIST_TABS) : 0;
-         if (selection > 0 && size > 0)
+         size_t selection = driver_ctx->list_get_selection
+            ? driver_ctx->list_get_selection(menu_st->userdata) : 0;
+         size_t _len      = driver_ctx->list_get_size
+            ? driver_ctx->list_get_size(menu_st->userdata, MENU_LIST_TABS) : 0;
+         if (selection > 0 && _len > 0)
          {
             struct item_file *item        = NULL;
             /* Label contains the path and path contains the label */
-            if ((item = (struct item_file*)driver_ctx->list_get_entry(menu_st->userdata, MENU_LIST_HORIZONTAL,
-                        (unsigned)(selection - (size +1)))))
+            if ((item = (struct item_file*)driver_ctx->list_get_entry(
+                        menu_st->userdata, MENU_LIST_HORIZONTAL,
+                        (unsigned)(selection - (_len +1)))))
                return item->label;
          }
       }
@@ -1013,9 +1347,10 @@ static const char* explore_get_view_path(struct menu_state *menu_st, menu_list_t
 
    /* check if we are opening a saved view via Content > Playlists */
    if (    (cur->type == MENU_EXPLORE_TAB)
-         && cur->path 
-         && !string_is_equal(cur->path, 
-            msg_hash_to_str(MENU_ENUM_LABEL_GOTO_EXPLORE))
+         && cur->path
+         && memcmp(cur->path,
+            MENU_ENUM_LABEL_GOTO_EXPLORE_STR,
+            STRLEN_CONST(MENU_ENUM_LABEL_GOTO_EXPLORE_STR) + 1) != 0
       )
       return cur->path;
 
@@ -1024,17 +1359,17 @@ static const char* explore_get_view_path(struct menu_state *menu_st, menu_list_t
 
 static void explore_on_edit_views(enum msg_hash_enums msg)
 {
+   const char           *_msg = msg_hash_to_str(msg);
    struct menu_state *menu_st = menu_state_get_ptr();
    if (menu_st->driver_ctx->environ_cb)
       menu_st->driver_ctx->environ_cb(MENU_ENVIRON_RESET_HORIZONTAL_LIST,
                NULL, menu_st->userdata);
-
-   runloop_msg_queue_push(msg_hash_to_str(msg),
-         1, 180, true, NULL,
+   runloop_msg_queue_push(_msg, strlen(_msg), 1, 180, true, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
 }
 
-static int explore_action_ok_deleteview(const char *path, const char *label, unsigned type, size_t idx, size_t entry_idx)
+static int explore_action_ok_deleteview(const char *path, const char *label,
+      unsigned type, size_t idx, size_t entry_idx)
 {
    struct menu_state *menu_st    = menu_state_get_ptr();
    menu_list_t *menu_list        = menu_st->entries.list;
@@ -1068,25 +1403,33 @@ static void explore_action_saveview_complete(void *userdata, const char *name)
    settings               = config_get_ptr();
    _len                   = fill_pathname_join_special(lvwpath,
          settings->paths.directory_playlist, name, sizeof(lvwpath));
-   strlcpy(lvwpath + _len, ".lvw", sizeof(lvwpath) - _len);
+   strlcpy_lit(lvwpath + _len, ".lvw", sizeof(lvwpath) - _len);
 
    if (filestream_exists(lvwpath))
    {
-      runloop_msg_queue_push(msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_VIEW_EXISTS),
-            1, 360, true, NULL,
+      const char *_msg = msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_VIEW_EXISTS);
+      runloop_msg_queue_push(_msg, strlen(_msg), 1, 360, true, NULL,
             MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
       return;
    }
 
-   file = intfstream_open_file(lvwpath,
-         RETRO_VFS_FILE_ACCESS_WRITE, RETRO_VFS_FILE_ACCESS_HINT_NONE);
-   if (!file)
+   if (!(file = intfstream_open_file(lvwpath,
+         RETRO_VFS_FILE_ACCESS_WRITE, RETRO_VFS_FILE_ACCESS_HINT_NONE)))
    {
-      RARCH_ERR("[explore view] Failed to write json file %s.\n", lvwpath);
+      RARCH_ERR("[Explore] Failed to write json file %s.\n", lvwpath);
       return;
    }
 
-   w = rjsonwriter_open_stream(file);
+   if (!(w = rjsonwriter_open_intfstream(file)))
+   {
+      /* Every rjsonwriter_* call below dereferences this without a
+       * check of its own. */
+      RARCH_ERR("[Explore] Failed to create json writer for %s.\n", lvwpath);
+      intfstream_close(file);
+      free(file);
+      filestream_delete(lvwpath);
+      return;
+   }
 
    rjsonwriter_add_start_object(w);
 
@@ -1150,20 +1493,38 @@ static void explore_action_saveview_complete(void *userdata, const char *name)
    rjsonwriter_add_newline(w);
    rjsonwriter_add_end_object(w);
    rjsonwriter_add_newline(w);
-   rjsonwriter_free(w);
+
+   /* rjsonwriter_free() performs the final flush, so its result is what
+    * says whether the view was written completely.  A short write used
+    * to be announced as "view saved" and left a truncated .lvw behind -
+    * which then fails to parse when the view is opened, and, because
+    * saving refuses to overwrite an existing file, also blocks saving
+    * the same view again under that name.  Remove the partial file so
+    * the name stays free. */
+   if (!rjsonwriter_free(w))
+   {
+      RARCH_ERR("[Explore] Failed to write json file %s.\n", lvwpath);
+      intfstream_close(file);
+      free(file);
+      filestream_delete(lvwpath);
+      return;
+   }
+
    intfstream_close(file);
    free(file);
 
    explore_on_edit_views(MENU_ENUM_LABEL_EXPLORE_VIEW_SAVED);
 }
 
-static int explore_action_ok_saveview(const char *path, const char *label, unsigned type, size_t idx, size_t entry_idx)
+static int explore_action_ok_saveview(const char *path, const char *label,
+      unsigned type, size_t idx, size_t entry_idx)
 {
-   menu_input_ctx_line_t line;
+   menu_input_ctx_line_t line = {0};
    line.label                 = msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_NEW_VIEW);
    line.label_setting         = NULL;
    line.type                  = 0;
    line.idx                   = 0;
+   line.text_type             = MENU_INPUT_DIALOG_KB_TYPE_TEXT;
    line.cb                    = explore_action_saveview_complete;
    menu_input_dialog_start(&line);
    return 0;
@@ -1184,7 +1545,7 @@ static void explore_load_view(explore_state_t *state, const char* path)
          RETRO_VFS_FILE_ACCESS_READ, RETRO_VFS_FILE_ACCESS_HINT_NONE)))
       return;
 
-   json = rjson_open_stream(file);
+   json = rjson_open_intfstream(file);
 
    /* Configure parser */
    rjson_set_options(json,
@@ -1196,18 +1557,18 @@ static void explore_load_view(explore_state_t *state, const char* path)
       if (depth == 1 && type == RJSON_STRING)
       {
          const char* key = rjson_get_string(json, NULL);
-         if (        string_is_equal(key, "filter_name")
+         if (        !strcmp(key, "filter_name")
                   && rjson_next(json) == RJSON_STRING)
             strlcpy(state->view_search,
                   rjson_get_string(json, NULL),
 		  sizeof(state->view_search));
-         else if (   string_is_equal(key, "filter_equal")
+         else if (   !strcmp(key, "filter_equal")
                   && rjson_next(json) == RJSON_OBJECT)
             op = EXPLORE_OP_EQUAL;
-         else if (   string_is_equal(key, "filter_min")
+         else if (   !strcmp(key, "filter_min")
                   && rjson_next(json) == RJSON_OBJECT)
             op = EXPLORE_OP_MIN;
-         else if (   string_is_equal(key, "filter_max")
+         else if (   !strcmp(key, "filter_max")
                   && rjson_next(json) == RJSON_OBJECT)
             op = EXPLORE_OP_MAX;
       }
@@ -1217,7 +1578,8 @@ static void explore_load_view(explore_state_t *state, const char* path)
       {
          const char* key = rjson_get_string(json, NULL);
          for (cat = 0; cat != EXPLORE_CAT_COUNT; cat++)
-            if (string_is_equal(key, explore_by_info[cat].rdbkey)) 
+            if (memcmp(key, explore_by_info[cat].rdbkey,
+                     strlen(explore_by_info[cat].rdbkey) + 1) == 0)
                break;
          if (cat == EXPLORE_CAT_COUNT)
             rjson_next(json); /* skip value */
@@ -1228,7 +1590,7 @@ static void explore_load_view(explore_state_t *state, const char* path)
             unsigned lvl, lvl_max      = state->view_levels;
             uint8_t valid_op           = ((uint8_t)-1);
             type                       = rjson_next(json);
-            if (     type == RJSON_STRING 
+            if (     type == RJSON_STRING
                   || type == RJSON_NUMBER)
                value = rjson_get_string(json, NULL);
             if (value && !*value)
@@ -1274,14 +1636,14 @@ static void explore_load_view(explore_state_t *state, const char* path)
                else if (op == EXPLORE_OP_MIN)
                {
                   state->view_idx_min[lvl] = (cmp ? i + 1 : i);
-                  valid_op                 = 
+                  valid_op                 =
                      ((lvl != lvl_max && state->view_op[lvl] == EXPLORE_OP_MAX)
                       ? EXPLORE_OP_RANGE : EXPLORE_OP_MIN);
                }
                else if (op == EXPLORE_OP_MAX)
                {
                   state->view_idx_max[lvl] = i;
-                  valid_op                 = 
+                  valid_op                 =
                      ((lvl != lvl_max && state->view_op[lvl] == EXPLORE_OP_MIN)
                       ? EXPLORE_OP_RANGE : EXPLORE_OP_MAX);
                }
@@ -1292,7 +1654,7 @@ static void explore_load_view(explore_state_t *state, const char* path)
                state->view_cats     [lvl] = cat;
                state->view_use_split[lvl] = explore_by_info[cat].use_split;
                if (lvl == lvl_max)
-                  state->view_levels++; 
+                  state->view_levels++;
             }
          }
       }
@@ -1307,7 +1669,7 @@ static void explore_load_view(explore_state_t *state, const char* path)
 unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
 {
    unsigned i;
-   char tmp[512];
+   char tmp[1024];
    struct explore_state *state  = explore_state;
    struct menu_state   *menu_st = menu_state_get_ptr();
    menu_handle_t *menu          = menu_st->driver_data;
@@ -1334,7 +1696,7 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
 
       menu_entries_append(list,
             msg_hash_to_str(MENU_ENUM_LABEL_VALUE_EXPLORE_INITIALISING_LIST),
-            msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_INITIALISING_LIST),
+            MENU_ENUM_LABEL_EXPLORE_INITIALISING_LIST_STR,
             MENU_ENUM_LABEL_EXPLORE_INITIALISING_LIST,
             FILE_TYPE_NONE, 0, 0, NULL);
 
@@ -1368,27 +1730,27 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
       unsigned cat               = state->view_cats[i];
       explore_string_t **entries = state->by[cat];
       explore_string_t *match    = state->view_match[i];
-      explore_append_title(state, "%s%s: ", (i ? " / " : ""),
+      explore_append_title(state->title, sizeof(state->title), "%s%s: ", (i ? " / " : ""),
             msg_hash_to_str(explore_by_info[cat].name_enum));
       switch (state->view_op[i])
       {
          case EXPLORE_OP_EQUAL:
-            explore_append_title(state, "%s", (match 
+            explore_append_title(state->title, sizeof(state->title), "%s", (match
                   ? match->str
                   : msg_hash_to_str(MENU_ENUM_LABEL_VALUE_UNKNOWN)));
             break;
          case EXPLORE_OP_MIN:
-            explore_append_title(state, "%s - %s",
+            explore_append_title(state->title, sizeof(state->title), "%s - %s",
                   entries[state->view_idx_min[i]]->str,
                   entries[RBUF_LEN(entries)-1]->str);
             break;
          case EXPLORE_OP_MAX:
-            explore_append_title(state, "%s - %s",
+            explore_append_title(state->title, sizeof(state->title), "%s - %s",
                   entries[0]->str,
                   entries[state->view_idx_max[i]]->str);
             break;
          case EXPLORE_OP_RANGE:
-            explore_append_title(state, "%s - %s",
+            explore_append_title(state->title, sizeof(state->title), "%s - %s",
                   entries[state->view_idx_min[i]]->str,
                   entries[state->view_idx_max[i]]->str);
             break;
@@ -1397,7 +1759,7 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
 
    /* append string search to title */
    if (*state->view_search)
-      explore_append_title(state, "%s%s: '%s'",
+      explore_append_title(state->title, sizeof(state->title), "%s%s: '%s'",
             (state->view_levels ? " / " : ""),
             msg_hash_to_str(MENU_ENUM_LABEL_VALUE_RDB_ENTRY_NAME),
             state->view_search);
@@ -1408,7 +1770,7 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
                ? EXPLORE_ICONS_CONTENT
                : EXPLORE_ICONS_OFF;
 
-   if (     current_type == MENU_EXPLORE_TAB 
+   if (     current_type == MENU_EXPLORE_TAB
          || current_type == EXPLORE_TYPE_ADDITIONALFILTER)
    {
       /* Explore top or selecting an additional filter category */
@@ -1419,7 +1781,7 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_EXPLORE_TAB),
                sizeof(state->title));
       else
-         explore_append_title(state, " / %s",
+         explore_append_title(state->title, sizeof(state->title), " / %s",
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_EXPLORE_ADDITIONAL_FILTER));
 
       if (!*state->view_search)
@@ -1433,7 +1795,8 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_EXPLORE_SEARCH_NAME),
                EXPLORE_TYPE_SEARCH, explore_action_ok_find);
          if (list->size)
-            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel = explore_action_sublabel_spacer;
+            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel =
+               explore_action_sublabel_spacer;
       }
 
       for (cat = 0; cat < EXPLORE_CAT_COUNT; cat++)
@@ -1452,33 +1815,35 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
                   && !explore_by_info[cat].is_boolean
                   && RBUF_LEN(state->by[cat]) > 1))
          {
-            size_t tmplen = strlcpy(tmp,
-                  msg_hash_to_str(explore_by_info[cat].by_enum), sizeof(tmp));
+            size_t _len = 0;
+            strlcpy_append(tmp, sizeof(tmp), &_len,
+                  msg_hash_to_str(explore_by_info[cat].by_enum));
 
             if (is_top)
             {
                if (explore_by_info[cat].is_numeric)
-                  snprintf(tmp         + tmplen,
-                           sizeof(tmp) - tmplen,
+                  snprintf(tmp         + _len,
+                           sizeof(tmp) - _len,
                            " (%s - %s)",
                            entries[0]->str,
                            entries[RBUF_LEN(entries) - 1]->str);
                else if (!explore_by_info[cat].is_boolean)
                {
-                  tmplen += strlcpy (tmp + tmplen, " (", sizeof(tmp) - tmplen);
-                  tmplen += snprintf(tmp + tmplen,       sizeof(tmp) - tmplen,
+                  strlcpy_append(tmp, sizeof(tmp), &_len, " (");
+                  _len += snprintf(tmp + _len, sizeof(tmp) - _len,
                         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_EXPLORE_ITEMS_COUNT),
                         (unsigned)RBUF_LEN(entries));
-                  strlcpy(tmp  + tmplen, ")",  sizeof(tmp) - tmplen);
+                  if (_len >= sizeof(tmp))
+                     _len = sizeof(tmp) - 1;
+                  strlcpy_append(tmp, sizeof(tmp), &_len, ")");
                }
             }
             else if (i != state->view_levels)
             {
-               tmplen += strlcpy(tmp + tmplen, " (", sizeof(tmp) - tmplen);
-               tmplen += strlcpy(tmp + tmplen,
-                     msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_RANGE_FILTER),
-                     sizeof(tmp)     - tmplen);
-               strlcpy(tmp + tmplen, ")", sizeof(tmp) - tmplen);
+               strlcpy_append(tmp, sizeof(tmp), &_len, " (");
+               strlcpy_append(tmp, sizeof(tmp), &_len,
+                     msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_RANGE_FILTER));
+               strlcpy_append(tmp, sizeof(tmp), &_len, ")");
             }
 
             explore_menu_entry(list, state,
@@ -1489,7 +1854,7 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
       if (is_top)
       {
          if (list->size)
-            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel = 
+            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel =
                explore_action_sublabel_spacer;
          explore_menu_entry(list, state,
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_EXPLORE_SHOW_ALL),
@@ -1509,14 +1874,14 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
       if (state->has_unknown[current_cat])
       {
          if (list->size)
-            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel = 
+            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel =
                explore_action_sublabel_spacer;
          explore_menu_entry(list, state,
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_UNKNOWN),
                EXPLORE_TYPE_FILTERNULL, explore_action_ok);
       }
 
-      explore_append_title(state, "%s",
+      explore_append_title(state->title, sizeof(state->title), "%s",
             msg_hash_to_str(explore_by_info[current_cat].by_enum));
    }
    else if (current_type < EXPLORE_TYPE_FIRSTITEM
@@ -1540,19 +1905,19 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
       bool filtered_category_have_unknown = false;
 
       if (is_show_all)
-         explore_append_title(state,
+         explore_append_title(state->title, sizeof(state->title),
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_EXPLORE_ALL));
 
       if (is_filtered_category)
       {
          /* List filtered items in a selected explore by category */
          if (!view_levels || view_cats[view_levels - 1] != current_cat)
-            explore_append_title(state, " / %s",
+            explore_append_title(state->title, sizeof(state->title), " / %s",
                   msg_hash_to_str(explore_by_info[current_cat].by_enum));
          else
          {
             /* List all items again when setting a range filter */
-            explore_append_title(state, " (%s)",
+            explore_append_title(state->title, sizeof(state->title), " (%s)",
                   msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_RANGE_FILTER));
             view_levels--;
          }
@@ -1569,7 +1934,7 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
                msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_DELETE_VIEW),
                EXPLORE_TYPE_VIEW, explore_action_ok_deleteview);
          if (list->size)
-            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel = 
+            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel =
                explore_action_sublabel_spacer;
       }
       else
@@ -1587,7 +1952,7 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
                msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_SAVE_VIEW),
                EXPLORE_TYPE_VIEW, explore_action_ok_saveview);
          if (list->size)
-            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel = 
+            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel =
                explore_action_sublabel_spacer;
       }
 
@@ -1607,7 +1972,7 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
                      explore_string_t** split = e->split;
                      do
                      {
-                        if (*split == view_match[i]) 
+                        if (*split == view_match[i])
                            break;
                      } while (*(++split));
                      if (*split)
@@ -1630,7 +1995,7 @@ unsigned menu_displaylist_explore(file_list_t *list, settings_t *settings)
             }
          }
 
-         if (has_search && !strcasestr(e->playlist_entry->label, view_search))
+         if (has_search && !compat_strcasestr(e->playlist_entry->label, view_search))
             goto SKIP_ENTRY;
 
          if (is_filtered_category)
@@ -1662,13 +2027,13 @@ SKIP_ENTRY:;
          qsort(list->list, list->size, sizeof(*list->list),
                explore_qsort_func_menulist);
 
-      explore_append_title(state,
+      explore_append_title(state->title, sizeof(state->title),
             " (%u)", (unsigned)(list->size - first_list_entry));
 
       if (is_filtered_category && filtered_category_have_unknown)
       {
          if (list->size)
-            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel = 
+            ((menu_file_list_cbs_t*)list->list[list->size-1].actiondata)->action_sublabel =
                explore_action_sublabel_spacer;
          explore_menu_entry(list, state,
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_UNKNOWN),
@@ -1681,17 +2046,16 @@ SKIP_ENTRY:;
    {
       /* Content page of selected game */
       int pl_idx;
-      const struct playlist_entry *pl_entry = 
+      const struct playlist_entry *pl_entry =
          state->entries[current_type - EXPLORE_TYPE_FIRSTITEM].playlist_entry;
 
-      strlcpy(state->title,
-            pl_entry->label, sizeof(state->title));
+      strlcpy(state->title, pl_entry->label, sizeof(state->title));
 
       for (pl_idx = 0; pl_idx != (int)RBUF_LEN(state->playlists); pl_idx++)
       {
          menu_displaylist_info_t          info;
          const struct playlist_entry *pl_first = NULL;
-         playlist_t                       *pl  = 
+         playlist_t                       *pl  =
             state->playlists[pl_idx];
 
          playlist_get_index(pl, 0, &pl_first);
@@ -1700,7 +2064,7 @@ SKIP_ENTRY:;
                || (pl_entry >= pl_first + playlist_size(pl)))
             continue;
 
-         /* Fake all the state so the content screen 
+         /* Fake all the state so the content screen
           * and information screen think we're viewing via playlist */
          menu_displaylist_info_init(&info);
          playlist_set_cached_external(pl);
@@ -1720,7 +2084,7 @@ SKIP_ENTRY:;
 uintptr_t menu_explore_get_entry_icon(unsigned type)
 {
    unsigned i;
-   if (     !explore_state 
+   if (     !explore_state
          || !explore_state->show_icons
          || (type < EXPLORE_TYPE_FIRSTITEM))
       return 0;
@@ -1730,12 +2094,12 @@ uintptr_t menu_explore_get_entry_icon(unsigned type)
    {
       explore_entry_t* e = &explore_state->entries[i];
       if (e < RBUF_END(explore_state->entries))
-         return explore_state->icons[e->by[EXPLORE_BY_SYSTEM]->idx];
+         return GFX_SURFACE_HANDLE(explore_state->icons[e->by[EXPLORE_BY_SYSTEM]->idx]);
    }
    else if (explore_state->show_icons == EXPLORE_ICONS_SYSTEM_CATEGORY)
    {
       if (i < RBUF_LEN(explore_state->icons))
-         return explore_state->icons[i];
+         return GFX_SURFACE_HANDLE(explore_state->icons[i]);
    }
    return 0;
 }
@@ -1747,7 +2111,7 @@ ssize_t menu_explore_get_entry_playlist_index(unsigned type,
    int              pl_idx;
    explore_entry_t* entry;
 
-   if (     !explore_state 
+   if (     !explore_state
          || (type < EXPLORE_TYPE_FIRSTITEM)
          || (explore_state->show_icons != EXPLORE_ICONS_CONTENT))
       return -1;
@@ -1773,7 +2137,7 @@ ssize_t menu_explore_get_entry_playlist_index(unsigned type,
       if (playlist_entry)
          *playlist_entry = entry->playlist_entry;
 
-      /* correct numbers of list pos and list size */ 
+      /* correct numbers of list pos and list size */
       if (list && list_pos && list_size)
          while (*list_size && list->list[list->size-*list_size].type < EXPLORE_TYPE_FIRSTITEM)
             { (*list_size)--; (*list_pos)--; }
@@ -1793,7 +2157,7 @@ ssize_t menu_explore_set_playlist_thumbnail(unsigned type,
    ssize_t playlist_index = -1;
    playlist_t *playlist   = NULL;
 
-   if (     !explore_state 
+   if (     !explore_state
          || (type < EXPLORE_TYPE_FIRSTITEM)
          || (explore_state->show_icons != EXPLORE_ICONS_CONTENT))
       return -1;
@@ -1803,7 +2167,7 @@ ssize_t menu_explore_set_playlist_thumbnail(unsigned type,
       return -1;
 
    db_name = entry->by[EXPLORE_BY_SYSTEM]->str;
-   if (!string_is_empty(db_name))
+   if (db_name && *db_name)
       playlist_index = menu_explore_get_entry_playlist_index(
             type, &playlist, NULL, NULL, NULL, NULL);
 

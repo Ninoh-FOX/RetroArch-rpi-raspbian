@@ -14,6 +14,7 @@
  *  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <stdlib.h>
 #include <stdint.h>
 
 #include <boolean.h>
@@ -23,7 +24,7 @@
 #include "../../retroarch.h"
 
 /* forward declarations */
-void *RWebCamInit(uint64_t caps, unsigned width, unsigned height);
+void *RWebCamInit(uint64_t caps, unsigned width, unsigned height, bool debug);
 void RWebCamFree(void *data);
 bool RWebCamStart(void *data);
 void RWebCamStop(void *data);
@@ -31,10 +32,11 @@ bool RWebCamPoll(void *data, retro_camera_frame_raw_framebuffer_t frame_raw_cb,
       retro_camera_frame_opengl_texture_t frame_gl_cb);
 
 static void *rwebcam_init(const char *device, uint64_t caps,
-      unsigned width, unsigned height)
+      unsigned dims)
 {
    (void)device;
-   return RWebCamInit(caps, width, height);
+   return RWebCamInit(caps, VIDEO_SCALE_W(dims), VIDEO_SCALE_H(dims),
+         !!getenv("RWEBCAM_DEBUG"));
 }
 
 static void rwebcam_free(void *data)
@@ -54,8 +56,10 @@ static void rwebcam_stop(void *data)
 
 static bool rwebcam_poll(void *data,
       retro_camera_frame_raw_framebuffer_t frame_raw_cb,
-      retro_camera_frame_opengl_texture_t frame_gl_cb)
+      retro_camera_frame_opengl_texture_t frame_gl_cb,
+      retro_camera_frame_planar_t frame_planar_cb)
 {
+   (void)frame_planar_cb;
    return RWebCamPoll(data, frame_raw_cb, frame_gl_cb);
 }
 

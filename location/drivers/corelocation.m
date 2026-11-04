@@ -1,0 +1,221 @@
+/*  RetroArch - A frontend for libretro.
+ *  Copyright (C) 2025      - Joseph Mattiello
+ *
+ *  RetroArch is free software: you can redistribute it and/or modify it under the terms
+ *  of the GNU General Public License as published by the Free Software Found-
+ *  ation, either version 3 of the License, or (at your option) any later version.
+ *
+ *  RetroArch is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+ *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+ *  PURPOSE.  See the GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License along with RetroArch.
+ *  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#import <CoreLocation/CoreLocation.h>
+#include "../../apple_runtime.h"
+#include "../../location_driver.h"
+#include "../../retroarch.h"
+#include "../../verbosity.h"
+#ifdef __MACH__
+#include <TargetConditionals.h>
+#endif
+@interface CoreLocationManager : NSObject <CLLocationManagerDelegate>
+@property (strong, nonatomic) CLLocationManager *locationManager;
+@property (assign) double latitude;
+@property (assign) double longitude;
+@property (assign) bool authorized;
+/* What the authorization callback does, for the request to call
+ * directly rather than through the deprecated delegate method. */
+- (void)applyAuthorizationStatus:(CLAuthorizationStatus)status;
+@end
+
+/* -locationManager:didChangeAuthorizationStatus:, which macOS 11 / iOS 14
+ * replaced with -locationManagerDidChangeAuthorization: and deprecated:
+ * installed by +initialize on the releases before, the only ones that
+ * call it. */
+static void corelocation_did_change_status(id self, SEL _cmd,
+      id manager, int status)
+{
+   [(CoreLocationManager*)self
+      applyAuthorizationStatus:(CLAuthorizationStatus)status];
+}
+
+@implementation CoreLocationManager
+
++ (void)initialize {
+    if (self != [CoreLocationManager class])
+        return;
+    if (!apple_runtime_available(APPLE_RUNTIME_VER(11, 0, 0), APPLE_RUNTIME_VER(14, 0, 0), APPLE_RUNTIME_VER(14, 0, 0)))
+        apple_rt_add_method(self,
+              "locationManager:didChangeAuthorizationStatus:",
+              corelocation_did_change_status, "v@:@i");
+}
+
++ (instancetype)sharedInstance {
+    static CoreLocationManager *sharedInstance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        sharedInstance = [[CoreLocationManager alloc] init];
+    });
+    return sharedInstance;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self)
+    {
+        _locationManager = [[CLLocationManager alloc] init];
+        _locationManager.delegate = self;
+        _locationManager.desiredAccuracy = kCLLocationAccuracyBest;
+        _authorized = false;
+    }
+    return self;
+}
+
+- (void)requestAuthorization {
+    CLAuthorizationStatus status;
+    /* The instance property is macOS 11 / iOS 14, the class method it
+     * replaces deprecated there: both are sent by selector, so neither
+     * warns whichever floor the build has. */
+    if (apple_runtime_available(APPLE_RUNTIME_VER(11, 0, 0), APPLE_RUNTIME_VER(14, 0, 0), APPLE_RUNTIME_VER(14, 0, 0)))
+        status = (CLAuthorizationStatus)apple_rt_get_int(_locationManager,
+              @selector(authorizationStatus));
+    else
+        status = (CLAuthorizationStatus)apple_rt_get_int([CLLocationManager class],
+              @selector(authorizationStatus));
+
+    if (status == kCLAuthorizationStatusNotDetermined)
+    {
+        if (apple_runtime_available(APPLE_RUNTIME_VER(10, 15, 0), 0, 0))
+            apple_rt_send_void(_locationManager,
+                  sel_registerName("requestWhenInUseAuthorization"));
+#if TARGET_OS_OSX
+        else
+            /* Pre-10.15 macOS has no explicit when-in-use request API; starting
+             * location updates raises the authorization prompt implicitly. */
+            [_locationManager startUpdatingLocation];
+#endif
+    }
+    else
+        [self applyAuthorizationStatus:status];
+}
+
+- (void)locationManager:(CLLocationManager *)manager didUpdateLocations:(NSArray<CLLocation *> *)locations {
+    CLLocation *location = [locations lastObject];
+    self.latitude = location.coordinate.latitude;
+    self.longitude = location.coordinate.longitude;
+}
+
+- (void)locationManager:(CLLocationManager *)manager didFailWithError:(NSError *)error {
+    RARCH_WARN("[Location] Location manager failed with error: %s.\n", error.description.UTF8String);
+    NSLog(@"Location manager failed with error: %@", error);
+}
+
+- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager {
+    [self applyAuthorizationStatus:(CLAuthorizationStatus)apple_rt_get_int(
+          manager, @selector(authorizationStatus))];
+}
+
+- (void)applyAuthorizationStatus:(CLAuthorizationStatus)status {
+#if TARGET_OS_OSX
+    if (apple_runtime_available(APPLE_RUNTIME_VER(10, 12, 0), 0, 0))
+        self.authorized = (status == kCLAuthorizationStatusAuthorizedAlways);
+#elif TARGET_OS_IPHONE
+    if (apple_runtime_available(0, APPLE_RUNTIME_VER(8, 0, 0), APPLE_RUNTIME_VER(9, 0, 0)))
+        self.authorized = (status == kCLAuthorizationStatusAuthorizedWhenInUse ||
+                           status == kCLAuthorizationStatusAuthorizedAlways);
+#endif
+#if !TARGET_OS_TV
+    if (self.authorized)
+        [_locationManager startUpdatingLocation];
+#endif
+}
+
+@end
+
+typedef struct corelocation {
+    CoreLocationManager *manager;
+} corelocation_t;
+
+static void *corelocation_init(void)
+{
+   corelocation_t *corelocation = (corelocation_t*)calloc(1, sizeof(*corelocation));
+   if (!corelocation)
+      return NULL;
+
+   corelocation->manager = [CoreLocationManager sharedInstance];
+   [corelocation->manager requestAuthorization];
+
+   return corelocation;
+}
+
+static void corelocation_free(void *data)
+{
+   corelocation_t *corelocation = (corelocation_t*)data;
+   if (!corelocation)
+      return;
+
+   free(corelocation);
+}
+
+static bool corelocation_start(void *data)
+{
+   corelocation_t *corelocation = (corelocation_t*)data;
+   if (!corelocation || !corelocation->manager.authorized)
+      return false;
+
+#if !TARGET_OS_TV
+   [corelocation->manager.locationManager startUpdatingLocation];
+#endif
+   return true;
+}
+
+static void corelocation_stop(void *data)
+{
+   corelocation_t *corelocation = (corelocation_t*)data;
+   if (corelocation)
+      [corelocation->manager.locationManager stopUpdatingLocation];
+}
+
+static bool corelocation_get_position(void *data, double *lat, double *lon,
+      double *horiz_accuracy, double *vert_accuracy)
+{
+   corelocation_t *corelocation = (corelocation_t*)data;
+   if (!corelocation || !corelocation->manager.authorized)
+      return false;
+
+#if TARGET_OS_TV
+   CLLocation *location = [corelocation->manager.locationManager location];
+   *lat = location.coordinate.latitude;
+   *lon = location.coordinate.longitude;
+#else
+   *lat = corelocation->manager.latitude;
+   *lon = corelocation->manager.longitude;
+#endif
+   *horiz_accuracy = 0.0; // CoreLocation doesn't provide this directly
+   *vert_accuracy = 0.0;  // CoreLocation doesn't provide this directly
+   return true;
+}
+
+static void corelocation_set_interval(void *data, unsigned interval_ms,
+      unsigned interval_distance)
+{
+   corelocation_t *corelocation = (corelocation_t*)data;
+   if (!corelocation)
+      return;
+
+   corelocation->manager.locationManager.distanceFilter = interval_distance;
+   corelocation->manager.locationManager.desiredAccuracy = kCLLocationAccuracyBest;
+}
+
+location_driver_t location_corelocation = {
+    corelocation_init,
+    corelocation_free,
+    corelocation_start,
+    corelocation_stop,
+    corelocation_get_position,
+    corelocation_set_interval,
+    "corelocation",
+};
