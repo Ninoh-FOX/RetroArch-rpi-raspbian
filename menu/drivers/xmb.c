@@ -63,6 +63,7 @@
 #include "../../msg_hash_lbl_str.h"
 #ifdef HAVE_POCKET_MENU
 #include "../pocket_menu.h"
+#define XMB_POCKET_DPI_RATIO 0.65f
 #else
 #define POCKET_SAVESTATE_THUMBNAILS(enabled) (enabled)
 #endif
@@ -1933,22 +1934,6 @@ static void xmb_update_savestate_thumbnail_path(void *data, unsigned i)
       entry->flags |= MENU_ENTRY_FLAG_LABEL_ENABLED;
       menu_entry_get(entry, 0, i, NULL, true);
 
-#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
-      /* Pocket achievement list: the selected badge, large, where a
-       * savestate thumbnail goes (the Miyoo Menu showed it so) */
-      if (     pocket_menu_badge_list_open()
-            && entry->type >= MENU_SETTINGS_CHEEVOS_START
-            && entry->type <  MENU_SETTINGS_NETPLAY_ROOMS_START)
-      {
-         rcheevos_menu_get_badge_path(entry->type - MENU_SETTINGS_CHEEVOS_START,
-               xmb->savestate_thumbnail_file_path,
-               sizeof(xmb->savestate_thumbnail_file_path));
-         if (!string_is_equal(old_path, xmb->savestate_thumbnail_file_path))
-            gfx_thumbnail_reset(&xmb->thumbnails.savestate);
-         xmb->fullscreen_thumbnails_available = true;
-      }
-      else
-#endif
       if (*entry->label)
       {
          unsigned _state_slot = string_to_unsigned(entry->label);
@@ -4108,10 +4093,6 @@ static void xmb_populate_entries(void *data,
          || string_is_equal(label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
 #ifdef HAVE_POCKET_MENU
          || pocket_menu_is_slot_list(label)
-#ifdef HAVE_CHEEVOS
-         || (string_is_equal(label, MENU_ENUM_LABEL_ACHIEVEMENT_LIST_STR)
-            && pocket_menu_in_context())
-#endif
 #endif
          ;
 
@@ -6123,6 +6104,29 @@ static INLINE bool xmb_use_ps3_layout(unsigned menu_xmb_layout,
    return (VIDEO_SCALE_W(dims) > 320) && (VIDEO_SCALE_H(dims) > 240);
 }
 
+/* Menu Scale Factor as XMB applies it */
+static float xmb_menu_scale_factor(settings_t *settings, unsigned dims)
+{
+   float factor     = settings->floats.menu_scale_factor;
+#ifdef HAVE_POCKET_MENU
+   /* XMB sizes itself by pixel count, as for a TV, which leaves its
+    * text unreadable on a handheld panel: no smaller than the
+    * DPI-based size the other menus use */
+   unsigned width   = VIDEO_SCALE_W(dims);
+   if (width)
+   {
+      float dpi_factor = gfx_display_get_dpi_scale(disp_get_ptr(),
+            settings, dims, settings->bools.video_fullscreen, false)
+            * XMB_POCKET_DPI_RATIO * 1920.0f / (float)width;
+      if (factor < dpi_factor)
+         factor = dpi_factor;
+   }
+#else
+   (void)dims;
+#endif
+   return factor;
+}
+
 static INLINE float xmb_get_scale_factor(float menu_scale_factor,
       bool use_ps3_layout, unsigned width)
 {
@@ -6817,10 +6821,11 @@ static void xmb_layout(xmb_handle_t *xmb)
    size_t selection             = menu_st->selection_ptr;
    unsigned current             = (unsigned)selection;
    unsigned end                 = (unsigned)MENU_LIST_GET_SELECTION(menu_list, 0)->size;
+   float menu_scale_factor      = xmb_menu_scale_factor(settings, xmb->last_dims);
 
-   xmb_init_scale_mod(xmb->scale_mod, settings->floats.menu_scale_factor * 100.0f);
-   xmb->scale_cap = (settings->floats.menu_scale_factor > 1.0f)
-         ? settings->floats.menu_scale_factor
+   xmb_init_scale_mod(xmb->scale_mod, menu_scale_factor * 100.0f);
+   xmb->scale_cap = (menu_scale_factor > 1.0f)
+         ? menu_scale_factor
          : 1.0f;
 
    if (xmb->use_ps3_layout)
@@ -7472,6 +7477,10 @@ static void xmb_render(void *data,
    if (!xmb)
       return;
 
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   pocket_menu_badge_preview_update();
+#endif
+
    menu_media_controls_settings_iterate(&xmb->media);
 
    if (startup_token && xmb->thumbnails.pending == XMB_PENDING_THUMBNAIL_NONE
@@ -7538,7 +7547,8 @@ static void xmb_render(void *data,
       xmb_set_title(xmb);
 
    use_ps3_layout                 = xmb_use_ps3_layout(settings->uints.menu_xmb_layout, dims);
-   scale_factor                   = xmb_get_scale_factor(settings->floats.menu_scale_factor,
+   scale_factor                   = xmb_get_scale_factor(
+         xmb_menu_scale_factor(settings, dims),
          use_ps3_layout, VIDEO_SCALE_W(dims));
 #if defined(_WIN32) && !defined(_XBOX) && !defined(__WINRT__)
    if (xmb->last_scale_factor > 0.0f && win32_message_modal_active())
@@ -9744,6 +9754,11 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
    font_driver_bind_block(xmb->font, NULL);
    font_driver_bind_block(xmb->font2, NULL);
 
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   pocket_menu_badge_preview_draw(userdata, video_info->dims,
+         (float)video_width, (float)video_height);
+#endif
+
    /* Draw fullscreen thumbnails, if required */
    xmb_draw_fullscreen_thumbnails(
          xmb,
@@ -9892,6 +9907,7 @@ static void xmb_menu_animation_update_time(
 static void *xmb_init(void **userdata, bool video_is_threaded)
 {
    unsigned out_dims;
+   float menu_scale_factor;
    int i;
    xmb_handle_t *xmb          = NULL;
    settings_t *settings       = config_get_ptr();
@@ -9914,9 +9930,10 @@ static void *xmb_init(void **userdata, bool video_is_threaded)
     * above; xmb_frame will refresh these every render. */
    xmb->last_dims   = out_dims;
 
-   xmb_init_scale_mod(xmb->scale_mod, settings->floats.menu_scale_factor * 100.0f);
-   xmb->scale_cap = (settings->floats.menu_scale_factor > 1.0f)
-         ? settings->floats.menu_scale_factor
+   menu_scale_factor = xmb_menu_scale_factor(settings, out_dims);
+   xmb_init_scale_mod(xmb->scale_mod, menu_scale_factor * 100.0f);
+   xmb->scale_cap = (menu_scale_factor > 1.0f)
+         ? menu_scale_factor
          : 1.0f;
 
    *userdata                          = xmb;
@@ -9973,7 +9990,7 @@ static void *xmb_init(void **userdata, bool video_is_threaded)
          xmb_use_ps3_layout(settings->uints.menu_xmb_layout, out_dims);
    xmb->last_use_ps3_layout                   = xmb->use_ps3_layout;
    xmb->last_scale_factor                     = xmb_get_scale_factor(
-         settings->floats.menu_scale_factor,
+         menu_scale_factor,
          xmb->use_ps3_layout, VIDEO_SCALE_W(out_dims));
    xmb->margins_title                          = (float)settings->ints.menu_xmb_title_margin * 10.0f;
    xmb->last_margins_title                     = xmb->margins_title;
@@ -10027,6 +10044,9 @@ static void xmb_free_textures(xmb_handle_t *xmb)
 #endif
 #ifdef HAVE_NETWORKING
    xmb->netplay_tab_node.icon            = NULL;
+#endif
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   pocket_menu_badge_preview_reset();
 #endif
 }
 

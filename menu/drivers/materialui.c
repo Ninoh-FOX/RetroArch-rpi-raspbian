@@ -2556,21 +2556,6 @@ static void materialui_update_savestate_thumbnail_path(void *data, unsigned i)
       entry->flags |= MENU_ENTRY_FLAG_LABEL_ENABLED;
       menu_entry_get(entry, 0, i, NULL, true);
 
-#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
-      /* Pocket achievement list: the selected badge, large, where a
-       * savestate thumbnail goes (the Miyoo Menu showed it so) */
-      if (     pocket_menu_badge_list_open()
-            && entry->type >= MENU_SETTINGS_CHEEVOS_START
-            && entry->type <  MENU_SETTINGS_NETPLAY_ROOMS_START)
-      {
-         rcheevos_menu_get_badge_path(entry->type - MENU_SETTINGS_CHEEVOS_START,
-               mui->savestate_thumbnail_file_path,
-               sizeof(mui->savestate_thumbnail_file_path));
-         if (!string_is_equal(old_path, mui->savestate_thumbnail_file_path))
-            gfx_thumbnail_reset(&mui->thumbnails.savestate);
-      }
-      else
-#endif
       if (*entry->label)
       {
          unsigned _state_slot = string_to_unsigned(entry->label);
@@ -4516,6 +4501,10 @@ static void materialui_render(void *data,
 
    if (!mui || !list)
       return;
+
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   pocket_menu_badge_preview_update();
+#endif
 
    menu_media_controls_settings_iterate(&mui->media);
 
@@ -6577,11 +6566,6 @@ static bool materialui_is_savestate_slot(materialui_handle_t *mui)
          || string_is_equal(entry.label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
 #ifdef HAVE_POCKET_MENU
          || string_is_equal(entry.label, MENU_ENUM_LABEL_POCKET_STATE_SLOT_STR)
-#ifdef HAVE_CHEEVOS
-         || (   entry.type >= MENU_SETTINGS_CHEEVOS_START
-             && entry.type <  MENU_SETTINGS_NETPLAY_ROOMS_START
-             && pocket_menu_badge_list_open())
-#endif
 #endif
          );
 }
@@ -8736,6 +8720,12 @@ static void materialui_frame(void *data, video_frame_info_t *video_info)
    font_flush(VIDEO_SCALE_PACK(video_width,
          video_height), &mui->font_data.hint);
 
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   pocket_menu_badge_preview_draw(userdata, video_info->dims,
+         (float)(video_width  - VIDEO_SCALE_W(mui->nav_bar_layout_dims)),
+         (float)(video_height - VIDEO_SCALE_H(mui->nav_bar_layout_dims)));
+#endif
+
    /* Draw fullscreen thumbnails, if currently active
     * > Must be done *after* we flush the first layer
     *   of text */
@@ -9970,6 +9960,9 @@ static void materialui_free_textures(materialui_handle_t *mui)
       gfx_surface_free(mui->textures.list[i]);
       mui->textures.list[i] = NULL;
    }
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   pocket_menu_badge_preview_reset();
+#endif
 }
 
 static void materialui_free(void *data)
@@ -10660,10 +10653,6 @@ static void materialui_populate_entries(void *data, const char *path,
             || string_is_equal(label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
 #ifdef HAVE_POCKET_MENU
             || pocket_menu_is_slot_list(label)
-#ifdef HAVE_CHEEVOS
-            || (string_is_equal(label, MENU_ENUM_LABEL_ACHIEVEMENT_LIST_STR)
-               && pocket_menu_in_context())
-#endif
 #endif
             || string_to_unsigned(path) == MENU_ENUM_LABEL_STATE_SLOT))
    {

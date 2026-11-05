@@ -45,10 +45,12 @@
 #ifdef HAVE_GFX_WIDGETS
 #include "../gfx/gfx_widgets.h"
 #endif
+#ifdef HAVE_CHEEVOS
+#include "../cheevos/cheevos_menu.h"
+#endif
 
 #define POCKET_CFG_FILE      "pocket_menu.cfg"
 #define POCKET_PERF_EXT      ".pocket"
-#define POCKET_SENSE_DEFAULT 1
 
 static struct
 {
@@ -270,6 +272,9 @@ static void pocket_perf_apply(unsigned profile)
 
 unsigned pocket_menu_perf_get(void)
 {
+   /* the menu may open before a deferred profile is applied */
+   if (pocket_st.perf_pending >= 0)
+      return (unsigned)pocket_st.perf_pending;
    return pocket_st.perf;
 }
 
@@ -288,6 +293,7 @@ void pocket_menu_perf_set(unsigned profile)
 {
    if (profile >= POCKET_PERF_COUNT)
       return;
+   pocket_st.perf_pending = -1;
    pocket_perf_apply(profile);
 }
 
@@ -359,15 +365,16 @@ bool pocket_menu_perf_save(bool rom)
    char data[8];
    char msg[256];
    int  n;
-   bool ok = false;
+   bool ok          = false;
+   unsigned profile = pocket_menu_perf_get();
 
    if (pocket_perf_path(rom, path, sizeof(path), true))
    {
-      n  = snprintf(data, sizeof(data), "%u\n", pocket_st.perf);
+      n  = snprintf(data, sizeof(data), "%u\n", profile);
       ok = n > 0 && filestream_write_file(path, data, n);
    }
 
-   pocket_st.saved[rom ? 1 : 0] = ok ? (int)pocket_st.perf : -2;
+   pocket_st.saved[rom ? 1 : 0] = ok ? (int)profile : -2;
 
    if (ok)
    {
@@ -376,7 +383,7 @@ bool pocket_menu_perf_save(bool rom)
             ? path_basename_nocompression(path_get(RARCH_PATH_BASENAME))
             : sys->info.library_name;
       snprintf(msg, sizeof(msg), msg_hash_to_str(MSG_POCKET_PERF_SAVED),
-            pocket_menu_perf_label(pocket_st.perf), who ? who : "");
+            pocket_menu_perf_label(profile), who ? who : "");
    }
    else
       strlcpy(msg, msg_hash_to_str(MSG_POCKET_PERF_SAVE_FAILED), sizeof(msg));
@@ -384,6 +391,18 @@ bool pocket_menu_perf_save(bool rom)
    runloop_msg_queue_push(msg, strlen(msg), 1, 120, true, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
    return ok;
+}
+
+bool pocket_menu_perf_clear(bool rom)
+{
+   char path[PATH_MAX_LENGTH];
+
+   if (     pocket_perf_path(rom, path, sizeof(path), false)
+         && path_is_valid(path)
+         && filestream_delete(path) != 0)
+      return false;
+   pocket_st.saved[rom ? 1 : 0] = -1;
+   return true;
 }
 
 void pocket_menu_content_loaded(void)
@@ -586,4 +605,112 @@ bool pocket_menu_badge_list_open(void)
    return label
        && string_is_equal(label, MENU_ENUM_LABEL_ACHIEVEMENT_LIST_STR)
        && pocket_menu_in_context();
+}
+
+/* ---------------------------------------------------------------- */
+/* Selected badge preview                                            */
+/* ---------------------------------------------------------------- */
+
+/* A badge not downloaded yet is looked for again every this many
+ * frames, this many times: the list fetches the set as it opens. */
+#define POCKET_BADGE_RETRY_FRAMES 30
+#define POCKET_BADGE_TRIES        60
+
+static struct
+{
+   gfx_thumbnail_t thumb;
+   size_t   selection;
+   unsigned type;
+   unsigned wait;
+   unsigned tries;
+   bool     visible;
+} pocket_badge;
+
+void pocket_menu_badge_preview_reset(void)
+{
+   pocket_badge.visible = false;
+   pocket_badge.type    = 0;
+   gfx_thumbnail_reset(&pocket_badge.thumb);
+}
+
+void pocket_menu_badge_preview_update(void)
+{
+#ifdef HAVE_CHEEVOS
+   struct menu_state *menu_st = menu_state_get_ptr();
+   file_list_t *list          = menu_st->entries.list
+         ? MENU_LIST_GET_SELECTION(menu_st->entries.list, 0) : NULL;
+   size_t selection           = menu_st->selection_ptr;
+   unsigned type;
+
+   if (     !list
+         || selection >= list->size
+         || !pocket_menu_badge_list_open())
+   {
+      if (pocket_badge.type)
+         pocket_menu_badge_preview_reset();
+      return;
+   }
+
+   type = list->list[selection].type;
+   if (     type <  MENU_SETTINGS_CHEEVOS_START
+         || type >= MENU_SETTINGS_NETPLAY_ROOMS_START)
+   {
+      if (pocket_badge.type)
+         pocket_menu_badge_preview_reset();
+      return;
+   }
+
+   if (type != pocket_badge.type || selection != pocket_badge.selection)
+   {
+      gfx_thumbnail_reset(&pocket_badge.thumb);
+      pocket_badge.type      = type;
+      pocket_badge.selection = selection;
+      pocket_badge.wait      = 0;
+      pocket_badge.tries     = 0;
+   }
+   pocket_badge.visible = true;
+
+   if (     pocket_badge.thumb.status == GFX_THUMBNAIL_STATUS_MISSING
+         && pocket_badge.tries < POCKET_BADGE_TRIES
+         && !(pocket_badge.wait && --pocket_badge.wait))
+      gfx_thumbnail_reset(&pocket_badge.thumb);
+
+   if (pocket_badge.thumb.status == GFX_THUMBNAIL_STATUS_UNKNOWN)
+   {
+      char path[PATH_MAX_LENGTH];
+      settings_t *settings = config_get_ptr();
+      rcheevos_menu_get_badge_path(type - MENU_SETTINGS_CHEEVOS_START,
+            path, sizeof(path));
+      gfx_thumbnail_request_file(path, &pocket_badge.thumb,
+            settings->uints.gfx_thumbnail_upscale_threshold);
+      gfx_thumbnail_flush_requests();
+      pocket_badge.wait = POCKET_BADGE_RETRY_FRAMES;
+      pocket_badge.tries++;
+   }
+#endif
+}
+
+void pocket_menu_badge_preview_draw(void *userdata, unsigned video_dims,
+      float right, float bottom)
+{
+   gfx_thumbnail_shadow_t shadow;
+   unsigned w    = VIDEO_SCALE_W(video_dims);
+   unsigned h    = VIDEO_SCALE_H(video_dims);
+   unsigned size = ((w < h ? w : h) * 3) / 10;
+   float margin  = (float)size / 12.0f;
+
+   if (!pocket_badge.visible || !size)
+      return;
+
+   shadow.type          = GFX_THUMBNAIL_SHADOW_DROP;
+   shadow.alpha         = 0.5f;
+   shadow.drop.x_offset = margin / 2.0f;
+   shadow.drop.y_offset = margin / 2.0f;
+   shadow.outline.width = 0;
+
+   gfx_thumbnail_draw(userdata, video_dims, &pocket_badge.thumb,
+         right  - margin - (float)size,
+         bottom - margin - (float)size,
+         VIDEO_SCALE_PACK(size, size), GFX_THUMBNAIL_ALIGN_CENTRE,
+         1.0f, 1.0f, &shadow);
 }

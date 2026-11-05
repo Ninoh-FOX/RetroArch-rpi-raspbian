@@ -45,6 +45,9 @@
 #include "../../playlist.h"
 #include "../../manual_content_scan.h"
 #include "../../msg_hash_lbl_str.h"
+#ifdef HAVE_POCKET_MENU
+#include "../pocket_menu.h"
+#endif
 
 #include "../../audio/audio_driver.h"
 #include "../../input/input_remapping.h"
@@ -112,6 +115,30 @@ static int action_start_override_file_info(
                                    |  MENU_ST_FLAG_PREVENT_POPULATE;
    return 0;
 }
+
+#ifdef HAVE_POCKET_MENU
+static int action_start_pocket_setting(
+      const char *path, const char *label,
+      unsigned type, size_t idx, size_t entry_idx)
+{
+   switch (type)
+   {
+      case FILE_TYPE_POCKET_PERF_PROFILE:
+         pocket_menu_perf_set(POCKET_PERF_BALANCED);
+         break;
+      case FILE_TYPE_POCKET_SAVE_PERF_CORE:
+      case FILE_TYPE_POCKET_SAVE_PERF_ROM:
+         pocket_menu_perf_clear(type == FILE_TYPE_POCKET_SAVE_PERF_ROM);
+         break;
+      case FILE_TYPE_POCKET_JOYPAD_SENSE:
+         pocket_menu_joypad_sense_set(POCKET_SENSE_DEFAULT);
+         break;
+      default:
+         break;
+   }
+   return 0;
+}
+#endif
 
 static int action_start_shader_preset_file_info(
       const char *path, const char *label,
@@ -1076,6 +1103,14 @@ static int menu_cbs_init_bind_start_compare_type(menu_file_list_cbs_t *cbs,
          case MENU_SETTING_ACTION_HALTREPLAY:
             BIND_ACTION_START(cbs, action_start_replay_slot);
             break;
+#ifdef HAVE_POCKET_MENU
+         case FILE_TYPE_POCKET_PERF_PROFILE:
+         case FILE_TYPE_POCKET_SAVE_PERF_CORE:
+         case FILE_TYPE_POCKET_SAVE_PERF_ROM:
+         case FILE_TYPE_POCKET_JOYPAD_SENSE:
+            BIND_ACTION_START(cbs, action_start_pocket_setting);
+            break;
+#endif
          default:
             return -1;
       }

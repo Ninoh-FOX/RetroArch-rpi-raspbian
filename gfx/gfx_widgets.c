@@ -56,6 +56,12 @@
 
 #define BASE_FONT_SIZE      32.0f
 #define MSG_QUEUE_FONT_SIZE 20.0f
+#ifdef HAVE_POCKET_MENU
+/* Handhelds: the messages at the bottom larger than the banners */
+#define MSG_QUEUE_FONT_SCALE 1.6f
+#else
+#define MSG_QUEUE_FONT_SCALE 1.0f
+#endif
 
 static dispgfx_widget_t dispwidget_st = {0};
 
@@ -1328,7 +1334,7 @@ static void gfx_widgets_layout(
       }
       gfx_widgets_font_init(p_disp, p_dispwidget,
             &p_dispwidget->gfx_widget_fonts.msg_queue,
-            is_threaded, font_file, MSG_QUEUE_FONT_SIZE);
+            is_threaded, font_file, MSG_QUEUE_FONT_SIZE * MSG_QUEUE_FONT_SCALE);
 
       /* Only the message-queue font follows the language; the regular
        * and bold ones are always the ozone faces. Marking it lets a
@@ -1349,7 +1355,7 @@ static void gfx_widgets_layout(
             is_threaded, font_path, BASE_FONT_SIZE);
       gfx_widgets_font_init(p_disp, p_dispwidget,
             &p_dispwidget->gfx_widget_fonts.msg_queue,
-            is_threaded, font_path, MSG_QUEUE_FONT_SIZE);
+            is_threaded, font_path, MSG_QUEUE_FONT_SIZE * MSG_QUEUE_FONT_SCALE);
    }
 
    /* Calculate dimensions */
@@ -1394,7 +1400,8 @@ float gfx_widgets_scale_factor(void *data_disp, void *settings_data,
     * (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=323#c87) */
    volatile float scale_factor      = 0.0f;
    settings_t *settings             = (settings_t*)settings_data;
-#ifdef HAVE_XMB
+   /* The Pocket Menu sizes notifications alike over every menu */
+#if defined(HAVE_XMB) && !defined(HAVE_POCKET_MENU)
    enum menu_driver_id_type type    = p_disp->menu_driver_id;
    if (type == MENU_DRIVER_ID_XMB)
       scale_factor                  = gfx_display_get_widget_pixel_scale(p_disp, settings, dims, fullscreen);

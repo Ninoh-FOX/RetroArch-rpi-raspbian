@@ -254,6 +254,7 @@ float gfx_display_get_dpi_scale(
    static enum menu_driver_id_type last_menu_driver_id = MENU_DRIVER_ID_UNKNOWN;
    static float adjusted_scale                         = 1.0f;
    settings_t *settings                                = (settings_t*)settings_data;
+   enum menu_driver_id_type driver_id                  = p_disp->menu_driver_id;
 #ifdef HAVE_GFX_WIDGETS
    bool gfx_widget_scale_auto                          = settings->bools.menu_widget_scale_auto;
 #if (defined(RARCH_CONSOLE) || defined(RARCH_MOBILE))
@@ -279,6 +280,10 @@ float gfx_display_get_dpi_scale(
 #ifdef HAVE_GFX_WIDGETS
    if (is_widget)
    {
+#ifdef HAVE_POCKET_MENU
+      /* Notifications the same size over every menu: Ozone's */
+      driver_id = MENU_DRIVER_ID_OZONE;
+#endif
       if (gfx_widget_scale_auto)
       {
 #ifdef HAVE_RGUI
@@ -286,7 +291,7 @@ float gfx_display_get_dpi_scale(
           * is ignored
           * > If we are not using a widget scale factor override,
           *   just set menu_scale_factor to 1.0 */
-         if (p_disp->menu_driver_id == MENU_DRIVER_ID_RGUI)
+         if (driver_id == MENU_DRIVER_ID_RGUI)
             menu_scale_factor        = 1.0f;
          else
 #endif /* HAVE_RGUI */
@@ -311,11 +316,11 @@ float gfx_display_get_dpi_scale(
     * only update if something changes */
    if (    scale_updated
        || (menu_scale_factor      != last_menu_scale_factor)
-       || (p_disp->menu_driver_id != last_menu_driver_id))
+       || (driver_id              != last_menu_driver_id))
    {
       adjusted_scale            = scale * menu_scale_factor;
 #ifdef HAVE_OZONE
-      if (p_disp->menu_driver_id == MENU_DRIVER_ID_OZONE)
+      if (driver_id == MENU_DRIVER_ID_OZONE)
       {
          /* Ozone's sidebar may take a third of the screen and no
           * more, so the scale is capped at whatever puts it there. */
@@ -327,7 +332,7 @@ float gfx_display_get_dpi_scale(
 #endif
       adjusted_scale            = (adjusted_scale > 0.0001f) ? adjusted_scale : 1.0f;
       last_menu_scale_factor    = menu_scale_factor;
-      last_menu_driver_id       = p_disp->menu_driver_id;
+      last_menu_driver_id       = driver_id;
    }
 
    return adjusted_scale;

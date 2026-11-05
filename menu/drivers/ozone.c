@@ -3096,6 +3096,9 @@ static void ozone_free_context_textures(ozone_handle_t *ozone)
       gfx_surface_free(ozone->tab_textures[i]);
       ozone->tab_textures[i] = NULL;
    }
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   pocket_menu_badge_preview_reset();
+#endif
 }
 
 static void ozone_unload_theme_textures(ozone_handle_t *ozone)
@@ -4209,23 +4212,6 @@ static void ozone_update_savestate_thumbnail_path(void *data, unsigned i)
       entry->flags |= MENU_ENTRY_FLAG_LABEL_ENABLED;
       menu_entry_get(entry, 0, i, NULL, true);
 
-#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
-      /* Pocket achievement list: the selected badge, large, where a
-       * savestate thumbnail goes (the Miyoo Menu showed it so) */
-      if (     pocket_menu_badge_list_open()
-            && entry->type >= MENU_SETTINGS_CHEEVOS_START
-            && entry->type <  MENU_SETTINGS_NETPLAY_ROOMS_START)
-      {
-         rcheevos_menu_get_badge_path(entry->type - MENU_SETTINGS_CHEEVOS_START,
-               ozone->savestate_thumbnail_file_path,
-               sizeof(ozone->savestate_thumbnail_file_path));
-         if (!string_is_equal(old_path, ozone->savestate_thumbnail_file_path))
-            gfx_thumbnail_reset(&ozone->thumbnails.savestate);
-         ozone->flags |= OZONE_FLAG_WANT_THUMBNAIL_BAR
-                       | OZONE_FLAG_FULLSCREEN_THUMBNAILS_AVAILABLE;
-      }
-      else
-#endif
       if (*entry->label)
       {
          unsigned _state_slot = string_to_unsigned(entry->label);
@@ -11149,6 +11135,10 @@ static void ozone_render(void *data,
    if (!ozone)
       return;
 
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   pocket_menu_badge_preview_update();
+#endif
+
    menu_media_controls_settings_iterate(&ozone->media);
    if (ozone->media.settings_open && !(ozone->flags & OZONE_FLAG_WANT_THUMBNAIL_BAR))
       ozone->flags |= OZONE_FLAG_WANT_THUMBNAIL_BAR | OZONE_FLAG_NEED_COMPUTE;
@@ -13406,6 +13396,12 @@ static void ozone_frame(void *data, video_frame_info_t *video_info)
    font_flush(VIDEO_SCALE_PACK(video_width,
          video_height), &ozone->fonts.sidebar);
 
+#if defined(HAVE_POCKET_MENU) && defined(HAVE_CHEEVOS)
+   pocket_menu_badge_preview_draw(userdata,
+         VIDEO_SCALE_PACK(video_width, video_height), (float)video_width,
+         (float)video_height - ozone->dimensions.footer_height);
+#endif
+
    /* Draw fullscreen thumbnails, if required */
    ozone_draw_fullscreen_thumbnails(ozone,
          userdata,
@@ -13991,10 +13987,6 @@ static void ozone_populate_entries(
          || string_is_equal(label, MENU_ENUM_LABEL_STATE_SLOT_RUN_STR)
 #ifdef HAVE_POCKET_MENU
          || pocket_menu_is_slot_list(label)
-#ifdef HAVE_CHEEVOS
-         || (string_is_equal(label, MENU_ENUM_LABEL_ACHIEVEMENT_LIST_STR)
-            && pocket_menu_in_context())
-#endif
 #endif
          )
       ozone->flags |=  OZONE_FLAG_IS_STATE_SLOT;

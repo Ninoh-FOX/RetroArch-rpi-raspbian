@@ -38,7 +38,8 @@ enum pocket_perf_profile
    POCKET_PERF_COUNT
 };
 
-#define POCKET_SENSE_MAX 2
+#define POCKET_SENSE_MAX     2
+#define POCKET_SENSE_DEFAULT 1
 
 /* True when the Pocket Menu should replace the Quick Menu: the feature
  * is on and content (not the dummy core) is running. */
@@ -57,6 +58,8 @@ void pocket_menu_perf_set(unsigned profile);
 const char *pocket_menu_perf_label(unsigned profile);
 bool pocket_menu_perf_saved(bool rom, unsigned *profile);
 bool pocket_menu_perf_save(bool rom);
+/* Back to nothing saved: Start on the save entry */
+bool pocket_menu_perf_clear(bool rom);
 
 /* Content lifecycle: apply the saved profile on load, undo it on close. */
 void pocket_menu_content_loaded(void);
@@ -84,10 +87,19 @@ bool pocket_menu_in_context(void);
 /* The slot list on top saves (true) or loads (false). */
 bool pocket_menu_slot_list_is_save(void);
 /* The achievement list opened from the Pocket Menu: drivers show the
- * selected badge large, where a savestate thumbnail goes. */
+ * selected badge large over the bottom right corner. */
 bool pocket_menu_badge_list_open(void);
 #define POCKET_SAVESTATE_THUMBNAILS(enabled) \
-   ((enabled) || pocket_menu_slot_list_open() || pocket_menu_badge_list_open())
+   ((enabled) || pocket_menu_slot_list_open())
+
+/* That badge for the GPU drivers (RGUI draws its own): update loads it
+ * from render(), draw puts it in the corner whose bottom right is
+ * (right, bottom) from frame(), after the list text; reset drops the
+ * texture, on context destroy and free. */
+void pocket_menu_badge_preview_update(void);
+void pocket_menu_badge_preview_draw(void *userdata, unsigned video_dims,
+      float right, float bottom);
+void pocket_menu_badge_preview_reset(void);
 
 RETRO_END_DECLS
 
