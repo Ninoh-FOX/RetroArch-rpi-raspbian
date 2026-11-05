@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #if defined(__linux__)
 #include <unistd.h>
+#include <sys/syscall.h>
 #endif
 
 #include <file/file_path.h>
@@ -26,6 +27,7 @@
 #include <streams/file_stream.h>
 #include <string/stdstring.h>
 #include <rthreads/rthreads.h>
+#include <retro_dirent.h>
 
 #include "pocket_menu.h"
 
@@ -229,6 +231,105 @@ static uint64_t pocket_slow_cores_mask(void)
    return mask;
 }
 
+#if defined(__linux__)
+/* The prototype every Linux libc uses, as rthreads.c spells it out */
+extern long syscall(long number, ...);
+
+/* Power Saving confines every thread of the process, the ones a core
+ * starts for itself included: a multithreaded core (PS2, N64, PSP)
+ * does its work outside the frame loop's thread. What each thread had
+ * is kept, so leaving the profile gives it back. */
+#define POCKET_TID_SLOTS 128
+
+static struct
+{
+   long     tid;
+   uint64_t mask;
+} pocket_tids[POCKET_TID_SLOTS];
+static unsigned pocket_tid_count;
+static bool     pocket_confined;
+
+static bool pocket_tid_affinity(long tid, uint64_t *get, uint64_t set)
+{
+   unsigned long bits[64 / (8 * sizeof(unsigned long))];
+   unsigned i;
+
+   memset(bits, 0, sizeof(bits));
+   if (get)
+   {
+      *get = 0;
+      if (syscall(__NR_sched_getaffinity, tid, sizeof(bits), bits) <= 0)
+         return false;
+      for (i = 0; i < 64; i++)
+         if (bits[i / (8 * sizeof(unsigned long))]
+               & (1UL << (i % (8 * sizeof(unsigned long)))))
+            *get |= (uint64_t)1 << i;
+      return true;
+   }
+   if (!set)
+   {
+      long n = sysconf(_SC_NPROCESSORS_CONF);
+      for (i = 0; (long)i < n && i < 64; i++)
+         set |= (uint64_t)1 << i;
+   }
+   for (i = 0; i < 64; i++)
+      if (set & ((uint64_t)1 << i))
+         bits[i / (8 * sizeof(unsigned long))] |=
+            1UL << (i % (8 * sizeof(unsigned long)));
+   return syscall(__NR_sched_setaffinity, tid, sizeof(bits), bits) == 0;
+}
+
+/* @mask confines every thread; 0 gives each back what it had, and all
+ * CPUs to a thread started while confined. */
+static bool pocket_process_affinity(uint64_t mask)
+{
+   struct RDIR *dir;
+   bool ok = false;
+
+   if (!mask && !pocket_confined)
+      return true;
+   if (!(dir = retro_opendir("/proc/self/task")))
+      return false;
+   if (mask && !pocket_confined)
+      pocket_tid_count = 0;
+
+   while (retro_readdir(dir))
+   {
+      long     tid  = strtol(retro_dirent_get_name(dir), NULL, 10);
+      uint64_t prev = 0;
+      unsigned i;
+
+      if (tid <= 0)
+         continue;
+      for (i = 0; i < pocket_tid_count; i++)
+         if (pocket_tids[i].tid == tid)
+            break;
+      if (mask)
+      {
+         if (     i == pocket_tid_count
+               && i < POCKET_TID_SLOTS
+               && !pocket_confined
+               && pocket_tid_affinity(tid, &prev, 0))
+         {
+            pocket_tids[i].tid  = tid;
+            pocket_tids[i].mask = prev;
+            pocket_tid_count++;
+         }
+         ok |= pocket_tid_affinity(tid, NULL, mask);
+      }
+      else
+         pocket_tid_affinity(tid, NULL,
+               i < pocket_tid_count ? pocket_tids[i].mask : 0);
+   }
+   retro_closedir(dir);
+
+   pocket_confined = mask && ok;
+   if (!mask)
+      pocket_tid_count = 0;
+   return mask ? ok : true;
+}
+#endif
+
 /* Runs on the thread that drives the frame loop: affinity applies to
  * the calling thread, and the menu and the content loader both run
  * there. */
@@ -240,12 +341,21 @@ static void pocket_perf_apply(unsigned profile)
    bool prefer_fast     = settings ? settings->bools.thread_prefer_fast_cores : false;
 #endif
 
+#if defined(__linux__)
+   if (profile != POCKET_PERF_SAVER)
+      pocket_process_affinity(0);
+#endif
+
    switch (profile)
    {
       case POCKET_PERF_SAVER:
          {
             uint64_t slow = pocket_slow_cores_mask();
+#if defined(__linux__)
+            if (!slow || !pocket_process_affinity(slow))
+#else
             if (!slow || !sthread_set_current_affinity(slow))
+#endif
                sthread_set_current_affinity(0);
             sustained = false;
          }
