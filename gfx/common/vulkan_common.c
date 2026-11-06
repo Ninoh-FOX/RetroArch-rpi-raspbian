@@ -2737,6 +2737,8 @@ static void vulkan_context_wait_frames(gfx_ctx_vulkan_data_t *vk)
       vkResetFences(vk->context.device, 1, &vk->context.present_fence);
 }
 
+static void vulkan_consume_stale_acquires(gfx_ctx_vulkan_data_t *vk);
+
 static void vulkan_destroy_swapchain(gfx_ctx_vulkan_data_t *vk)
 {
    unsigned i;
@@ -2769,6 +2771,29 @@ static void vulkan_destroy_swapchain(gfx_ctx_vulkan_data_t *vk)
        * a rebuild after an out-of-date acquire, or a resize, does
        * not, and a threaded hardware core's work goes on. */
       vulkan_context_wait_frames(vk);
+
+      /* An image acquired and not drawn to yet has its acquire
+       * semaphore's signal still pending, as have the stale ones of
+       * frames that went unsubmitted. Those were destroyed here with
+       * the signal pending. Mali's Android WSI then failed the first
+       * present of the next swapchain made on the same device -
+       * QueueSignalReleaseImageANDROID returning VK_ERROR_DEVICE_LOST -
+       * which is every resume on Android, where the surface alone is
+       * recreated and the device kept. The signals are consumed by an
+       * empty fenced submission first, as a full stale list is. */
+      if (vk->context.swapchain_acquire_semaphore != VK_NULL_HANDLE)
+      {
+         if (vk->context.num_stale_acquire_semaphores
+               == VULKAN_MAX_SWAPCHAIN_IMAGES)
+            vulkan_consume_stale_acquires(vk);
+         vk->context.swapchain_stale_acquire_semaphores[
+            vk->context.num_stale_acquire_semaphores++] =
+               vk->context.swapchain_acquire_semaphore;
+         vk->context.swapchain_acquire_semaphore = VK_NULL_HANDLE;
+      }
+      if (vk->context.num_stale_acquire_semaphores)
+         vulkan_consume_stale_acquires(vk);
+
       vulkan_low_latency_retire(vk, vk->swapchain);
       memset(vk->context.swapchain_images, 0, sizeof(vk->context.swapchain_images));
       vk->swapchain                      = VK_NULL_HANDLE;

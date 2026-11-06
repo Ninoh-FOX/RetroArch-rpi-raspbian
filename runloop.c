@@ -9745,6 +9745,20 @@ static void runloop_gpu_device_lost(runloop_state_t *runloop_st)
    }
 
    command_event(CMD_EVENT_REINIT, &reinit_flags);
+
+   /* The frame whose submit reported the loss returned false, and
+    * video_driver_frame() takes a false frame as the driver going
+    * inactive: VIDEO_FLAG_ACTIVE is dropped and every frame after is
+    * discarded on entry. The reinit rebuilds the driver but raises
+    * nothing - only the session-start paths do - so the rebuilt
+    * driver never got a frame: the window stayed black with the core
+    * and audio running (Android, Mali-G76, lock then unlock). Raised
+    * again here, once there is a driver to take the frames. */
+   {
+      video_driver_state_t *video_st = video_state_get_ptr();
+      if (video_st->data)
+         video_st->main_flags |= VIDEO_FLAG_ACTIVE;
+   }
 }
 
 int runloop_iterate(void)
