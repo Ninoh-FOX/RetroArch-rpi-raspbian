@@ -541,10 +541,12 @@
 
 /* Threaded video: the core runs on one thread and the video driver
  * presents on another. Off by default, as it has always been; the
- * Switch and Android keep their own default. When it is on,
- * hardware-rendered cores follow it on every API that has a ring,
- * with no setting of their own. */
-#if defined(HAVE_LIBNX) || defined(ANDROID)
+ * Switch keeps its own default. On Android handhelds it costs more
+ * than it gives (an extra frame of latency, uneven pacing and a
+ * busier CPU for the small cores these devices run), so it is off
+ * there too. When it is on, hardware-rendered cores follow it on
+ * every API that has a ring, with no setting of their own. */
+#if defined(HAVE_LIBNX)
 #define DEFAULT_VIDEO_THREADED true
 #else
 #define DEFAULT_VIDEO_THREADED false
@@ -1647,8 +1649,10 @@
 #define DEFAULT_NETPLAY_ALLOW_PAUSING false
 
 /* Sync both analog sticks of joypad ports. Clients older than
- * netplay protocol 8 cannot join a host with this on. */
-#define DEFAULT_NETPLAY_ANALOG_JOYPADS true
+ * netplay protocol 8 cannot join a host with this on. Off: the
+ * handheld cores played here read the d-pad only, and with it off
+ * older RetroArch builds (other handhelds) can still join. */
+#define DEFAULT_NETPLAY_ANALOG_JOYPADS false
 
 /* Wait for every player's input instead of guessing and rewinding.
  * Cores whose states are too large or not deterministic enough to
