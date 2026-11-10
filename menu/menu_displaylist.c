@@ -4927,9 +4927,10 @@ static int menu_displaylist_parse_horizontal_list(
 
 #ifdef HAVE_POCKET_MENU
 /* Pocket Menu root. Entries that RetroArch already has (Resume,
- * Achievements, Netplay, Sync Now, Quit) are the native ones, bound and
- * translated as in the Quick Menu; only the slot lists, the performance
- * profile and the joypad window are the Pocket Menu's own. */
+ * Restart, Achievements, Netplay, Core Options, Sync Now, Quit) are the
+ * native ones, bound, translated and given icons as in the Quick Menu;
+ * only the slot lists, the performance profile and the joypad window
+ * are the Pocket Menu's own. */
 static unsigned menu_displaylist_parse_pocket_menu(file_list_t *list,
       settings_t *settings)
 {
@@ -4940,6 +4941,12 @@ static unsigned menu_displaylist_parse_pocket_menu(file_list_t *list,
          msg_hash_to_str(MENU_ENUM_LABEL_VALUE_RESUME_CONTENT),
          MENU_ENUM_LABEL_RESUME_CONTENT_STR,
          MENU_ENUM_LABEL_RESUME_CONTENT,
+         MENU_SETTING_ACTION_RUN, 0, 0, NULL))
+      count++;
+   if (menu_entries_append(list,
+         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_RESTART_CONTENT),
+         MENU_ENUM_LABEL_RESTART_CONTENT_STR,
+         MENU_ENUM_LABEL_RESTART_CONTENT,
          MENU_SETTING_ACTION_RUN, 0, 0, NULL))
       count++;
 
@@ -5024,6 +5031,14 @@ static unsigned menu_displaylist_parse_pocket_menu(file_list_t *list,
          MENU_SETTING_ACTION, 0, 0, NULL))
       count++;
 #endif
+
+   /* Empty path: the top level core options list, as in the Quick Menu */
+   if (menu_entries_append(list,
+         "",
+         MENU_ENUM_LABEL_CORE_OPTIONS_STR,
+         MENU_ENUM_LABEL_CORE_OPTIONS,
+         MENU_SETTING_ACTION_CORE_OPTIONS, 0, 0, NULL))
+      count++;
 
    if (menu_entries_append(list,
          msg_hash_to_str(MENU_ENUM_LABEL_VALUE_POCKET_JOYPAD_SENSE),

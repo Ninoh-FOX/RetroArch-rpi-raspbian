@@ -178,12 +178,12 @@ static int action_cancel_core_content(const char *path,
 }
 
 #ifdef HAVE_POCKET_MENU
-/* Back at the root of the Pocket Menu goes back to the game: the menu
- * was opened from it, and Main Menu is one entry away (Settings). */
+/* Back at the root of the Pocket Menu does nothing: resuming from it
+ * let the press reach the game. Resume is the first entry, and Main
+ * Menu is one entry away (Settings). */
 static int action_cancel_pocket_root(const char *path,
       const char *label, unsigned type, size_t idx)
 {
-   command_event(CMD_EVENT_RESUME, NULL);
    return 0;
 }
 #endif
