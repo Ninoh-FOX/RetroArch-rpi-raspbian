@@ -732,7 +732,7 @@ const video_driver_t *video_drivers[] = {
 #ifdef SWITCH
    &video_switch,
 #endif
-#ifdef HAVE_ODROIDGO2
+#if defined(HAVE_ODROIDGO2) && !defined(HAVE_RETROPIXEL)
    &video_oga,
 #endif
 #if defined(HAVE_SDL) && !defined(HAVE_SDL_DINGUX)

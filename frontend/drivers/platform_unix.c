@@ -3769,7 +3769,7 @@ static void frontend_unix_deinit(void *data)
    android_app_destroy(android_app);
 #endif
 
-#ifdef HAVE_LAKKA
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
    /* Reset brightness to maximum */
    if (settings->uints.screen_brightness != DEFAULT_SCREEN_BRIGHTNESS)
       frontend_unix_set_screen_brightness(DEFAULT_SCREEN_BRIGHTNESS);

@@ -330,6 +330,67 @@ static bool pocket_process_affinity(uint64_t mask)
 }
 #endif
 
+#ifdef HAVE_RETROPIXEL
+/* RK3326: four equal cores, so affinity does nothing. The profile sets
+ * the CPU, GPU and memory governors instead, the way the system's own
+ * performance and powersave modes do; Balanced puts back what the
+ * system chose when it launched the content. */
+static const char *pocket_rp_gov_path[] = {
+   "/sys/devices/system/cpu/cpufreq/policy0/scaling_governor",
+   "/sys/devices/platform/ff400000.gpu/devfreq/ff400000.gpu/governor",
+   "/sys/devices/platform/dmc/devfreq/dmc/governor"
+};
+#define POCKET_RP_GOVS ARRAY_SIZE(pocket_rp_gov_path)
+static char pocket_rp_gov_saved[POCKET_RP_GOVS][32];
+static bool pocket_rp_gov_changed = false;
+
+static void pocket_rp_gov_write(size_t i, const char *gov)
+{
+   if (gov && *gov)
+      filestream_write_file(pocket_rp_gov_path[i], gov, strlen(gov));
+}
+
+static void pocket_rp_governors(unsigned profile)
+{
+   size_t i;
+   const char *gov = NULL;
+
+   if (profile == POCKET_PERF_SAVER)
+      gov = "powersave";
+   else if (profile == POCKET_PERF_MAX)
+      gov = "performance";
+
+   if (!gov)
+   {
+      if (pocket_rp_gov_changed)
+         for (i = 0; i < POCKET_RP_GOVS; i++)
+            pocket_rp_gov_write(i, pocket_rp_gov_saved[i]);
+      pocket_rp_gov_changed = false;
+      return;
+   }
+
+   if (!pocket_rp_gov_changed)
+   {
+      for (i = 0; i < POCKET_RP_GOVS; i++)
+      {
+         char *buf = NULL;
+         pocket_rp_gov_saved[i][0] = '\0';
+         if (filestream_read_file(pocket_rp_gov_path[i], (void**)&buf, NULL)
+               && buf)
+         {
+            strlcpy(pocket_rp_gov_saved[i], buf, sizeof(pocket_rp_gov_saved[i]));
+            string_trim_whitespace_right(pocket_rp_gov_saved[i]);
+         }
+         free(buf);
+      }
+      pocket_rp_gov_changed = true;
+   }
+
+   for (i = 0; i < POCKET_RP_GOVS; i++)
+      pocket_rp_gov_write(i, gov);
+}
+#endif
+
 /* Runs on the thread that drives the frame loop: affinity applies to
  * the calling thread, and the menu and the content loader both run
  * there. */
@@ -375,6 +436,9 @@ static void pocket_perf_apply(unsigned profile)
    }
 
    frontend_driver_set_sustained_performance_mode(sustained);
+#ifdef HAVE_RETROPIXEL
+   pocket_rp_governors(profile);
+#endif
    pocket_st.perf         = profile;
    pocket_st.perf_applied = (profile != POCKET_PERF_BALANCED);
    RARCH_LOG("[Pocket] Performance profile: %u.\n", profile);

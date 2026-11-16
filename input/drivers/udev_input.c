@@ -91,7 +91,7 @@
 #endif
 
 /* Force UDEV_XKB_HANDLING for Lakka */
-#ifdef HAVE_LAKKA
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
 #ifndef UDEV_XKB_HANDLING
 #define UDEV_XKB_HANDLING
 #endif
@@ -4246,7 +4246,7 @@ static void *udev_input_init(const char *joypad_driver)
       goto error;
 
    video_context_driver_get_ident(&ctx_ident);
-#ifdef HAVE_LAKKA
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
    /* Force xkb_handling on Lakka */
    udev->xkb_handling = true;
 #else

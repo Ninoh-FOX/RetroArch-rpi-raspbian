@@ -1410,6 +1410,10 @@ float gfx_widgets_scale_factor(void *data_disp, void *settings_data,
       scale_factor                  = gfx_display_get_dpi_scale(
             p_disp,
             settings, dims, fullscreen, true);
+#ifdef HAVE_RETROPIXEL
+   /* 720x720 1:1 panel: notifications read too small */
+   scale_factor                     = scale_factor * 1.5f;
+#endif
    return scale_factor;
 }
 

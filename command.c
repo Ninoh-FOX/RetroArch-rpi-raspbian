@@ -5065,6 +5065,18 @@ bool command_set_core_option(command_t *cmd, const char *arg)
    return true;
 }
 
+bool command_pause(command_t *cmd, const char* arg)
+{
+   command_event(CMD_EVENT_PAUSE, NULL);
+   return true;
+}
+
+bool command_pause_resume(command_t *cmd, const char* arg)
+{
+   command_event(CMD_EVENT_UNPAUSE, NULL);
+   return true;
+}
+
 /* GET_CONFIG_PARAM <param name>
  *
  * The option that goes by this name, which GET_OPTION also reports;

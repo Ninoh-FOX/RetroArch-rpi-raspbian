@@ -6653,11 +6653,19 @@ static void xmb_layout_common(xmb_handle_t *xmb, float scale_factor, unsigned ne
    xmb->font2_size               = (xmb->font2_size < 6) ? 6.0f : xmb->font2_size;
 }
 
+
+#ifdef HAVE_RETROPIXEL
+/* 720x720 panel: text 20 % larger, icons and spacing unchanged */
+#define XMB_RP_FONT_SCALE 1.2f
+#else
+#define XMB_RP_FONT_SCALE 1.0f
+#endif
+
 static void xmb_layout_ps3(xmb_handle_t *xmb, settings_t *settings)
 {
    float scale_factor            = xmb->last_scale_factor;
    float scale_cap               = xmb->scale_cap;
-   unsigned new_font_size        = 32 * scale_factor;
+   unsigned new_font_size        = 32 * scale_factor * XMB_RP_FONT_SCALE;
 
    xmb->above_subitem_offset     =  1.5f / scale_cap;
    xmb->above_item_offset        = -1.0f / scale_cap;
@@ -6683,7 +6691,7 @@ static void xmb_layout_ps3(xmb_handle_t *xmb, settings_t *settings)
    }
 
    xmb->font_size                = new_font_size;
-   xmb->font2_size               = 22.0f          * scale_factor;
+   xmb->font2_size               = 22.0f          * scale_factor * XMB_RP_FONT_SCALE;
 
    xmb->icon_spacing_horizontal  = 192.0f         * scale_factor / scale_cap;
    xmb->icon_spacing_vertical    = 64.0f          * scale_factor;
@@ -6704,7 +6712,7 @@ static void xmb_layout_psp(xmb_handle_t *xmb, settings_t *settings)
 {
    float scale_factor            = xmb->last_scale_factor;
    float scale_cap               = xmb->scale_cap;
-   unsigned new_font_size        = 26 * scale_factor;
+   unsigned new_font_size        = 26 * scale_factor * XMB_RP_FONT_SCALE;
 
    xmb->above_subitem_offset     =  1.5f / scale_cap;
    xmb->above_item_offset        = -0.5f / scale_cap;
@@ -6730,7 +6738,7 @@ static void xmb_layout_psp(xmb_handle_t *xmb, settings_t *settings)
    }
 
    xmb->font_size                = new_font_size;
-   xmb->font2_size               = 18.0f          * scale_factor;
+   xmb->font2_size               = 18.0f          * scale_factor * XMB_RP_FONT_SCALE;
 
    xmb->icon_spacing_horizontal  = 192.0f         * scale_factor / scale_cap;
    xmb->icon_spacing_vertical    = 82.0f          * scale_factor;

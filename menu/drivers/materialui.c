@@ -781,6 +781,13 @@ typedef struct materialui_handle
    char savestate_thumbnail_file_path[PATH_MAX_LENGTH];
 } materialui_handle_t;
 
+#ifdef HAVE_RETROPIXEL
+/* 720x720 panel: the DPI estimate leaves these menus too small. */
+#define MUI_RP_SCALE 1.5f
+#else
+#define MUI_RP_SCALE 1.0f
+#endif
+
 static void hex32_to_rgba_normalized(uint32_t hex, float* rgba, float alpha)
 {
    rgba[0] = rgba[4] = rgba[8]  = rgba[12] = ((hex >> 16) & 0xFF) * (1.0f / 255.0f); /* r */
@@ -4511,7 +4518,7 @@ static void materialui_render(void *data,
    /* Check whether screen dimensions, menu scale
     * factor or layout optimisation settings have changed */
    scale_factor = gfx_display_get_dpi_scale(p_disp, settings,
-         dims, false, false);
+         dims, false, false) * MUI_RP_SCALE;
 
    if (   (scale_factor != mui->last_scale_factor)
        || (dims != mui->last_dims)
@@ -9834,7 +9841,7 @@ static void *materialui_init(void **userdata, bool video_is_threaded)
    mui->last_dims                         = out_dims;
    mui->last_scale_factor                 = gfx_display_get_dpi_scale(
          p_disp, settings, out_dims,
-         false, false);
+         false, false) * MUI_RP_SCALE;
    mui->dip_base_unit_size                = mui->last_scale_factor
       * MUI_DIP_BASE_UNIT_SIZE;
    mui->flags                             = 0;

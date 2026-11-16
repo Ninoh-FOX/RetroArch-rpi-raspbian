@@ -126,6 +126,8 @@ typedef struct gfx_ctx_go2_drm_data
    uint32_t connector_id;
    uint32_t crtc_id;
    int scan_wstride;    /* scanout row, in pixels */
+   int scan_rk_format;  /* RGA format of the scanout buffers */
+   bool rotate;         /* portrait panel showing a landscape picture */
    int src_rk_format;   /* RGA format of the GBM surface */
    /* Packed (VIDEO_SCALE_PACK) sizes: the landscape picture the panel
     * shows, and the frame GL draws into it. */
@@ -298,16 +300,18 @@ static bool go2_scanout_init(gfx_ctx_go2_drm_data_t *drm)
       memset(&c, 0, sizeof(c));
       c.width  = w;
       c.height = h;
-      c.bpp    = 16; /* DRM_FORMAT_RGB565 */
+      /* Unrotated panels scan out 32-bit: no RGA swizzle, no banding. */
+      c.bpp    = drm->rotate ? 16 : 32;
       if (drmIoctl(drm->fd, DRM_IOCTL_MODE_CREATE_DUMB, &c) < 0)
          return false;
       s->handle         = c.handle;
-      drm->scan_wstride = c.pitch / 2;
+      drm->scan_wstride = c.pitch / (c.bpp / 8);
 
       handles[0] = c.handle; handles[1] = handles[2] = handles[3] = 0;
       pitches[0] = c.pitch;  pitches[1] = pitches[2] = pitches[3] = 0;
       offsets[0] = offsets[1] = offsets[2] = offsets[3] = 0;
-      if (drmModeAddFB2(drm->fd, w, h, DRM_FORMAT_RGB565,
+      if (drmModeAddFB2(drm->fd, w, h,
+               drm->rotate ? DRM_FORMAT_RGB565 : DRM_FORMAT_XRGB8888,
                handles, pitches, offsets, &s->fb_id, 0))
          return false;
       if (drmPrimeHandleToFD(drm->fd, c.handle,
@@ -418,18 +422,22 @@ static void *gfx_ctx_go2_drm_init(void *video_driver)
       return NULL;
    }
 
-   /* The panel is portrait; the picture on it is landscape. */
-   if (     !go2_find_output(drm)
-         /* This driver should only be used on rotated screens */
-         || drm->mode.vdisplay < drm->mode.hdisplay)
+   if (!go2_find_output(drm))
    {
       close(drm->fd);
       free(drm);
       return NULL;
    }
 
-   drm->native_dims = VIDEO_SCALE_PACK(drm->mode.vdisplay,
-         drm->mode.hdisplay);
+   /* Portrait panels (OGA) show a landscape picture rotated; square
+    * and landscape ones (RetroPixel Pocket 720x720) need no rotation. */
+   drm->rotate = drm->mode.vdisplay > drm->mode.hdisplay;
+   if (drm->rotate)
+      drm->native_dims = VIDEO_SCALE_PACK(drm->mode.vdisplay,
+            drm->mode.hdisplay);
+   else
+      drm->native_dims = VIDEO_SCALE_PACK(drm->mode.hdisplay,
+            drm->mode.vdisplay);
    drm->fb_dims     = drm->native_dims;
    drm->orig_crtc   = drmModeGetCrtc(drm->fd, drm->crtc_id);
 
@@ -585,7 +593,8 @@ static bool go2_create_context(gfx_ctx_go2_drm_data_t *drm,
    if (!egl_get_native_visual_id(&drm->egl, &id))
       return false;
    /* Both read as BGRA to the RGA; alpha is ignored. */
-   drm->src_rk_format = RK_FORMAT_BGRA_8888;
+   drm->src_rk_format  = RK_FORMAT_BGRA_8888;
+   drm->scan_rk_format = drm->rotate ? RK_FORMAT_RGB_565 : drm->src_rk_format;
 
    if (!(drm->gbm_surface = gbm_surface_create(drm->gbm_dev,
                ctx_w, ctx_h, (uint32_t)id,
@@ -752,7 +761,7 @@ static void gfx_ctx_go2_drm_swap_buffers(void *data)
    dst.mmuFlag      = 1;
    dst.rect.wstride = drm->scan_wstride;
    dst.rect.hstride = drm->mode.vdisplay;
-   dst.rect.format  = RK_FORMAT_RGB_565;
+   dst.rect.format  = drm->scan_rk_format;
 
    /* Only the borders beside the picture need black, and only once per
     * buffer after the picture moves: the blit covers the rest. */
@@ -768,16 +777,26 @@ static void gfx_ctx_go2_drm_swap_buffers(void *data)
       s->clear_gen = drm->rect_gen;
    }
 
-   /* Landscape -> portrait: the picture's x runs down the panel. */
-   dst.rect.xoffset = 0;
-   dst.rect.yoffset = out_x;
-   dst.rect.width   = nat_h;
-   dst.rect.height  = out_w;
+   if (drm->rotate)
+   {
+      /* Landscape -> portrait: the picture's x runs down the panel. */
+      dst.rect.xoffset = 0;
+      dst.rect.yoffset = out_x;
+      dst.rect.width   = nat_h;
+      dst.rect.height  = out_w;
+   }
+   else
+   {
+      dst.rect.xoffset = out_x;
+      dst.rect.yoffset = 0;
+      dst.rect.width   = out_w;
+      dst.rect.height  = nat_h;
+   }
 
    memset(&src, 0, sizeof(src));
    src.fd           = src_fd;
    src.mmuFlag      = 1;
-   src.rotation     = HAL_TRANSFORM_ROT_270;
+   src.rotation     = drm->rotate ? HAL_TRANSFORM_ROT_270 : 0;
    src.scale_mode   = GO2_RGA_SCALE_MODE;
    src.rect.xoffset = 0;
    src.rect.yoffset = drm->ctx_h - src_h;

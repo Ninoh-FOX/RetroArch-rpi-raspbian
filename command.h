@@ -731,6 +731,8 @@ const struct cmd_map *command_hotkey_list(size_t *count);
 bool command_version(command_t *cmd, const char* arg);
 bool command_get_status(command_t *cmd, const char* arg);
 bool command_get_config_param(command_t *cmd, const char* arg);
+bool command_pause(command_t *cmd, const char* arg);
+bool command_pause_resume(command_t *cmd, const char* arg);
 bool command_show_osd_msg(command_t *cmd, const char* arg);
 bool command_load_state_slot(command_t *cmd, const char* arg);
 bool command_save_state_slot(command_t* cmd, const char* arg);
@@ -1267,6 +1269,9 @@ static const struct cmd_action_map action_map[] = {
    { "LIST_PLAYLISTS",   command_list_playlists,   "No argument", "List the playlists, as GET_PLAYLIST takes them.", CMD_INFO_READ_ONLY, NULL, &cmd_rows_playlists },
    { "GET_PLAYLIST",     command_get_playlist,     "<playlist> [first entry]", "A playlist's entries, 200 at a time: index, label, content and core paths, and next where there are more.", CMD_INFO_READ_ONLY, cmd_params_playlist, &cmd_rows_entries },
    { "SHOW_MSG",         command_show_osd_msg,     "<message>", "Show a message on screen.", 0, cmd_params_message },
+   /* Used by the RetroPixel screensaver to pause the content. */
+   { "PAUSE_GAME",       command_pause,            "No argument", "Pause the content.", CMD_INFO_NO_TOOL, NULL },
+   { "RESUME_GAME",      command_pause_resume,     "No argument", "Resume the content.", CMD_INFO_NO_TOOL, NULL },
 #if defined(HAVE_CHEEVOS)
    /* These functions use achievement addresses and only work if a game with achievements is
     * loaded. READ_CORE_MEMORY and WRITE_CORE_MEMORY are preferred and use system addresses. */

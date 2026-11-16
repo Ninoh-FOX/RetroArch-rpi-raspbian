@@ -4714,7 +4714,9 @@ bool command_event(enum event_command cmd, void *data)
           * cleanup actions (like writing autosave state) twice. */
          if (should_quit_on_close())
          {
+#ifndef HAVE_RETROPIXEL
             command_event(CMD_EVENT_QUIT, NULL);
+#endif
             break;
          }
 

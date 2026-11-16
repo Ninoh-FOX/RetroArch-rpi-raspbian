@@ -28,6 +28,9 @@
 
 #include <stdlib.h>
 
+#include <string.h>
+
+#include <compat/strl.h>
 #include <lists/string_list.h>
 #include <retro_atomic.h>
 
@@ -455,12 +458,61 @@ typedef struct alsa
     * fits start again from the writer's next sample; the last
     * published estimate stands until the new window publishes one. */
    retro_atomic_int_t clk_rebase;
+   /* What the stream was opened with, to open it again */
+   char     device[128];
+   unsigned req_rate;
+   unsigned req_latency;
+   unsigned reopen_skip;
 } alsa_t;
+
+/* A stream a system suspend broke cannot always be prepared again:
+ * dmix answers "prepare failed: Broken pipe" from then on and the
+ * content stays silent. Open the device anew; the broken handle is
+ * dropped only once the new one is up. */
+static int alsa_reopen(alsa_t *alsa)
+{
+   alsa_stream_info_t info;
+   snd_pcm_t *pcm    = NULL;
+   unsigned new_rate = 0;
+
+   /* Retried at most every 32 failed writes */
+   if (alsa->reopen_skip)
+   {
+      alsa->reopen_skip--;
+      return -1;
+   }
+
+   memset(&info, 0, sizeof(info));
+   if (     alsa_init_pcm(&pcm, alsa->device[0] ? alsa->device : NULL,
+               SND_PCM_STREAM_PLAYBACK, alsa->req_rate, alsa->req_latency,
+               audio_layout_channels(alsa->requested_layout),
+               &info, &new_rate, SND_PCM_NONBLOCK) < 0
+         || info.frame_bits != alsa->stream_info.frame_bits
+         || info.rate       != alsa->stream_info.rate
+         || info.permute    != alsa->stream_info.permute)
+   {
+      if (pcm)
+         alsa_free_pcm(pcm);
+      alsa->reopen_skip = 32;
+      return -1;
+   }
+
+   alsa_free_pcm(alsa->pcm);
+   alsa->pcm         = pcm;
+   alsa->stream_info = info;
+   alsa->is_paused   = false;
+   alsa->held        = false;
+   RARCH_WARN("[ALSA] Stream could not recover, reopened the device.\n");
+   return 0;
+}
 
 static int alsa_recover(alsa_t *alsa, int err)
 {
+   int rc;
    retro_atomic_store_release_int(&alsa->clk_rebase, 1);
-   return snd_pcm_recover(alsa->pcm, err, 1);
+   if ((rc = snd_pcm_recover(alsa->pcm, err, 1)) >= 0)
+      return rc;
+   return alsa_reopen(alsa);
 }
 
 /* The layout the device actually has, from its channel map or ALSA's
@@ -500,6 +552,10 @@ static void *alsa_init(const char *device, unsigned rate, unsigned latency,
    RARCH_LOG("[ALSA] Using ALSA version %s.\n", snd_asoundlib_version());
 
    alsa->requested_layout = audio_driver_requested_layout();
+   if (device)
+      strlcpy(alsa->device, device, sizeof(alsa->device));
+   alsa->req_rate         = rate;
+   alsa->req_latency      = latency;
    if (alsa_init_pcm(&alsa->pcm, device, SND_PCM_STREAM_PLAYBACK, rate,
             latency, audio_layout_channels(alsa->requested_layout),
             &alsa->stream_info, new_rate, SND_PCM_NONBLOCK) < 0)

@@ -13463,7 +13463,7 @@ static const setting_desc_t mm_desc_8[] = {
 };
 
 #if !TARGET_OS_IPHONE
-#ifdef HAVE_LAKKA
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
 static const setting_desc_t quit_lakka_desc[] = {
 /* GENERATED: rows come from settings_def_quit_restart.h in order. */
 #include "../settings/settings_def_quit_restart.h"
@@ -13472,7 +13472,7 @@ static const setting_desc_t quit_lakka_desc[] = {
 #endif
 
 #if !TARGET_OS_IPHONE
-#if !defined(HAVE_LAKKA)
+#if !defined(HAVE_LAKKA) || defined(HAVE_RETROPIXEL)
 static const setting_desc_t mm_desc_9[] = {
 /* GENERATED: rows come from settings_def_menu_main_actions_7.h in order. */
 #include "../settings/settings_def_menu_main_actions_7.h"
@@ -14498,14 +14498,14 @@ static const setting_desc_t menu_desc_24[] = {
 #include "../settings/settings_def_menu_main_views.h"
 };
 
-#ifdef HAVE_LAKKA
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
 static const setting_desc_t menu_quit_lakka_desc[] = {
 /* GENERATED: rows come from settings_def_menu_show_restart.h in order. */
 #include "../settings/settings_def_menu_show_restart.h"
 };
 #endif
 
-#if !defined(HAVE_LAKKA) && !TARGET_OS_IPHONE
+#if (!defined(HAVE_LAKKA) || defined(HAVE_RETROPIXEL)) && !TARGET_OS_IPHONE
 static const setting_desc_t menu_desc_25[] = {
 /* GENERATED: rows come from settings_def_quit_visibility.h in order. */
 #include "../settings/settings_def_quit_visibility.h"
@@ -15154,7 +15154,7 @@ static void settings_build_main_menu(
             ADD_DESC(mm_desc_8);
 #if !TARGET_OS_IPHONE
       /* Apple rejects iOS apps that let you forcibly quit them. */
-#ifdef HAVE_LAKKA
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
             ADD_DESC(quit_lakka_desc);
 #else
             ADD_DESC(mm_desc_9);
@@ -18095,7 +18095,7 @@ static void settings_build_menu(
 
             ADD_DESC(menu_desc_24);
 
-#ifdef HAVE_LAKKA
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
             ADD_DESC(menu_quit_lakka_desc);
 #elif !TARGET_OS_IPHONE
             ADD_DESC(menu_desc_25);
@@ -19065,7 +19065,7 @@ static void settings_build_lakka_services(
    (void)settings; (void)group_info; (void)subgroup_info;
    {
 
-#if defined(HAVE_LAKKA)
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
          START_GROUP(list, list_info, &group_info,
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_LAKKA_SERVICES),
                parent_group);
@@ -20346,12 +20346,12 @@ static const settings_desc_table_t settings_desc_registry[] = {
 #endif
    { mm_desc_8, (uint16_t)ARRAY_SIZE(mm_desc_8) },
 #if !TARGET_OS_IPHONE
-#ifdef HAVE_LAKKA
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
    { quit_lakka_desc, (uint16_t)ARRAY_SIZE(quit_lakka_desc) },
 #endif
 #endif
 #if !TARGET_OS_IPHONE
-#ifndef HAVE_LAKKA
+#if !defined(HAVE_LAKKA) || defined(HAVE_RETROPIXEL)
    { mm_desc_9, (uint16_t)ARRAY_SIZE(mm_desc_9) },
 #endif
 #endif
@@ -20675,10 +20675,10 @@ static const settings_desc_table_t settings_desc_registry[] = {
 #endif
    { menu_desc_23, (uint16_t)ARRAY_SIZE(menu_desc_23) },
    { menu_desc_24, (uint16_t)ARRAY_SIZE(menu_desc_24) },
-#ifdef HAVE_LAKKA
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
    { menu_quit_lakka_desc, (uint16_t)ARRAY_SIZE(menu_quit_lakka_desc) },
 #endif
-#if !defined(HAVE_LAKKA) && !TARGET_OS_IPHONE
+#if (!defined(HAVE_LAKKA) || defined(HAVE_RETROPIXEL)) && !TARGET_OS_IPHONE
    { menu_desc_25, (uint16_t)ARRAY_SIZE(menu_desc_25) },
 #endif
 #if defined(HAVE_LAKKA) || defined(HAVE_ODROIDGO2)

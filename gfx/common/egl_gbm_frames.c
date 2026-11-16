@@ -23,6 +23,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <dlfcn.h>
 #include <gbm.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -77,6 +78,23 @@ struct egl_gbm_frames
  * -1 not */
 static int egl_gbm_frames_verified[2];
 
+/* Older GBM implementations (vendor libmali) lack the map calls. */
+typedef void *(*egl_gbm_bo_map_t)(struct gbm_bo*, uint32_t, uint32_t,
+      uint32_t, uint32_t, uint32_t, uint32_t*, void**);
+typedef void (*egl_gbm_bo_unmap_t)(struct gbm_bo*, void*);
+static egl_gbm_bo_map_t   egl_gbm_bo_map;
+static egl_gbm_bo_unmap_t egl_gbm_bo_unmap;
+
+static bool egl_gbm_resolve_map(void)
+{
+   if (!egl_gbm_bo_map)
+   {
+      egl_gbm_bo_map   = (egl_gbm_bo_map_t)dlsym(RTLD_DEFAULT, "gbm_bo_map");
+      egl_gbm_bo_unmap = (egl_gbm_bo_unmap_t)dlsym(RTLD_DEFAULT, "gbm_bo_unmap");
+   }
+   return egl_gbm_bo_map && egl_gbm_bo_unmap;
+}
+
 static bool egl_gbm_has_ext(const char *list, const char *ext)
 {
    size_t len = strlen(ext);
@@ -96,7 +114,7 @@ static void egl_gbm_buf_free(egl_gbm_frames_t *f, egl_gbm_buf_t *b)
    if (b->image)
       f->destroy_image(f->dpy, b->image);
    if (b->map)
-      gbm_bo_unmap(b->bo, b->map_data);
+      egl_gbm_bo_unmap(b->bo, b->map_data);
    if (b->bo)
       gbm_bo_destroy(b->bo);
    memset(b, 0, sizeof(*b));
@@ -114,7 +132,7 @@ static bool egl_gbm_buf_init(egl_gbm_frames_t *f, egl_gbm_buf_t *b)
       return false;
    /* Mapped for good: where the map is the buffer itself, the GPU
     * samples what the core writes, which the check makes sure of */
-   if (!(b->map = gbm_bo_map(b->bo, 0, 0, f->width, f->height,
+   if (!(b->map = egl_gbm_bo_map(b->bo, 0, 0, f->width, f->height,
                GBM_BO_TRANSFER_READ_WRITE, &stride, &b->map_data)))
       return false;
    b->stride = stride;
@@ -364,7 +382,7 @@ egl_gbm_frames_t *egl_gbm_frames_new(int drm_fd, unsigned width,
          || count < 3 || count > EGL_GBM_FRAMES_MAX)
       return NULL;
    verified = &egl_gbm_frames_verified[bpp == 4 ? 0 : 1];
-   if (*verified < 0)
+   if (*verified < 0 || !egl_gbm_resolve_map())
       return NULL;
    if (!(f = (egl_gbm_frames_t*)calloc(1, sizeof(*f))))
       return NULL;

@@ -14330,7 +14330,9 @@ unsigned menu_displaylist_build_list(
             static const menu_displaylist_build_info_t build_list[] = {
                {MENU_ENUM_LABEL_FASTFORWARD_FRAMESKIP,      PARSE_ONLY_BOOL},
                {MENU_ENUM_LABEL_SUSTAINED_PERFORMANCE_MODE, PARSE_ONLY_BOOL},
+#ifndef HAVE_RETROPIXEL
                {MENU_ENUM_LABEL_CPU_PERFPOWER,              PARSE_ACTION},
+#endif
 #ifdef HAVE_LAKKA
                {MENU_ENUM_LABEL_GAMEMODE_ENABLE,            PARSE_ONLY_BOOL},
 #endif /*HAVE_LAKKA*/
@@ -17918,7 +17920,7 @@ static bool menu_displaylist_ctl_internal(
                flags.flags     = 0;
                video_context_driver_get_flags(&flags);
 #endif
-#ifdef HAVE_LAKKA
+#if defined(HAVE_LAKKA) && !defined(HAVE_RETROPIXEL)
                if (menu_entries_append(info->list,
                         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_UPDATE_LAKKA),
                         MENU_ENUM_LABEL_UPDATE_LAKKA_STR,
@@ -17984,6 +17986,7 @@ static bool menu_displaylist_ctl_internal(
                }
 #endif /* HAVE_UPDATE_CORES */
 
+#ifndef HAVE_RETROPIXEL
 #if defined(HAVE_COMPRESSION) && !defined(HAVE_MIST)
                if (menu_entries_append(info->list,
                         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_DOWNLOAD_CORE_SYSTEM_FILES),
@@ -18020,6 +18023,7 @@ static bool menu_displaylist_ctl_internal(
                         PARSE_ONLY_BOOL, false) != -1)
                   count++;
 #endif
+#endif /* !HAVE_RETROPIXEL */
 
 #ifdef HAVE_COMPRESSION
 #ifdef HAVE_UPDATE_CORE_INFO
@@ -18043,12 +18047,14 @@ static bool menu_displaylist_ctl_internal(
                   count++;
 #endif
 #if !defined(_3DS)
+#ifndef HAVE_RETROPIXEL
                if (menu_entries_append(info->list,
                         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_UPDATE_AUTOCONFIG_PROFILES),
                         MENU_ENUM_LABEL_UPDATE_AUTOCONFIG_PROFILES_STR,
                         MENU_ENUM_LABEL_UPDATE_AUTOCONFIG_PROFILES,
                         MENU_SETTING_ACTION, 0, 0, NULL))
                   count++;
+#endif
 
                if (menu_entries_append(info->list,
                         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_UPDATE_CHEATS),
@@ -18067,7 +18073,7 @@ static bool menu_displaylist_ctl_internal(
                   count++;
 #endif
 #endif /* HAVE_LIBRETRODB */
-#if !defined(_3DS)
+#if !defined(_3DS) && !defined(HAVE_RETROPIXEL)
                if (menu_entries_append(info->list,
                         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_UPDATE_OVERLAYS),
                         MENU_ENUM_LABEL_UPDATE_OVERLAYS_STR,
@@ -18426,12 +18432,15 @@ static bool menu_displaylist_ctl_internal(
                   count++;
 
 #if !TARGET_OS_IPHONE
+#ifndef HAVE_RETROPIXEL
+               /* RetroPixel: launched from ES, a restart has no content. */
                if (settings->bools.menu_show_restart_retroarch)
                   if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(
                         info->list,
                         MENU_ENUM_LABEL_RESTART_RETROARCH,
                         PARSE_ACTION, false) == 0)
                      count++;
+#endif
 
                if (settings->bools.menu_show_quit_retroarch)
                   if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(

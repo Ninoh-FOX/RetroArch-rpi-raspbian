@@ -816,6 +816,13 @@ struct ozone_handle
 
 typedef struct ozone_handle ozone_handle_t;
 
+#ifdef HAVE_RETROPIXEL
+/* 720x720 panel: the DPI estimate leaves these menus too small. */
+#define OZONE_RP_SCALE 1.3f
+#else
+#define OZONE_RP_SCALE 1.0f
+#endif
+
 static const float ozone_sidebar_gradient_top_light[16]                     = {
    0.94f,  0.94f,  0.94f,  1.00f,
    0.94f,  0.94f,  0.94f,  1.00f,
@@ -10131,7 +10138,7 @@ static void *ozone_init(void **userdata, bool video_is_threaded)
    ozone->last_framebuffer_opacity              = -1.0f;
    ozone->last_dims                             = out_dims;
    ozone->last_scale_factor                     = gfx_display_get_dpi_scale(p_disp,
-         settings, out_dims, false, false);
+         settings, out_dims, false, false) * OZONE_RP_SCALE;
    ozone->last_thumbnail_scale_factor           = settings->floats.ozone_thumbnail_scale_factor;
 
    ozone->entries_old                           = NULL;
@@ -11197,7 +11204,7 @@ static void ozone_render(void *data,
    /* Check whether screen dimensions or menu scale
     * factor have changed */
    scale_factor               = gfx_display_get_dpi_scale(p_disp, settings,
-            dims, false, false);
+            dims, false, false) * OZONE_RP_SCALE;
    thumbnail_scale_factor     = settings->floats.ozone_thumbnail_scale_factor;
    padding_factor             = settings->floats.ozone_padding_factor;
    font_scale_factor_global   = (font_scale == 1) ? (settings->floats.ozone_font_scale_factor_global) : 1.0f;

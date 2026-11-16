@@ -537,7 +537,12 @@ bool frontend_driver_can_set_screen_brightness(void)
 {
    frontend_state_t *frontend_st   = &frontend_driver_st;
    frontend_ctx_driver_t *frontend = frontend_st->current_frontend_ctx;
+#ifdef HAVE_RETROPIXEL
+   /* The system scripts own the backlight. */
+   return false;
+#else
    return (frontend && frontend->set_screen_brightness);
+#endif
 }
 
 void frontend_driver_detach_console(void)
